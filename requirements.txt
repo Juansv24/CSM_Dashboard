@@ -1,0 +1,6 @@
+streamlit
+pandas
+plotly
+requests
+gdown>=4.7.1
+duckdb>=0.9.0
