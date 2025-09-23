@@ -1,0 +1,6 @@
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Ignore all files and folders within the ".idea" folder
+/.idea/**
+
