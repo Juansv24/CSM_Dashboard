@@ -147,9 +147,8 @@ def consultar_datos_filtrados(umbral_similitud: float,
         st.error(f"Error consulta: {str(e)}")
         return pd.DataFrame()
 
-
 def obtener_estadisticas_departamentales(umbral_similitud: float) -> pd.DataFrame:
-    """Estadísticas por departamento"""
+    """Estadísticas por departamento - Conteo de oraciones únicas"""
 
     try:
         conn = st.session_state.get('duckdb_conn')
@@ -157,31 +156,65 @@ def obtener_estadisticas_departamentales(umbral_similitud: float) -> pd.DataFram
             return pd.DataFrame()
 
         query = f"""
+            WITH oraciones_unicas AS (
+                -- Paso 1: Para cada oración única (municipio + sentence_id_paragraph), obtener su MEJOR similitud
+                SELECT 
+                    dpto_cdpmp,
+                    dpto,
+                    mpio_cdpmp,
+                    sentence_id_paragraph,
+                    MAX(sentence_similarity) as mejor_similitud
+                FROM datos_principales 
+                WHERE tipo_territorio = 'Municipio'
+                GROUP BY dpto_cdpmp, dpto, mpio_cdpmp, sentence_id_paragraph
+            ),
+            stats_departamento AS (
+                -- Paso 2: Contar oraciones por departamento
+                SELECT 
+                    dpto_cdpmp,
+                    dpto as Departamento,
+                    COUNT(*) as Total_Oraciones,
+                    COUNT(CASE WHEN mejor_similitud >= {umbral_similitud} THEN 1 END) as Oraciones_Umbral,
+                    ROUND(
+                        CAST(COUNT(CASE WHEN mejor_similitud >= {umbral_similitud} THEN 1 END) AS FLOAT) / 
+                        CAST(COUNT(*) AS FLOAT) * 100, 2
+                    ) as Porcentaje_Umbral,
+                    COUNT(DISTINCT mpio_cdpmp) as Municipios
+                FROM oraciones_unicas
+                GROUP BY dpto_cdpmp, dpto
+            ),
+            metricas_adicionales AS (
+                -- Paso 3: Métricas de recomendaciones (estas sí usan el dataset completo)
+                SELECT 
+                    dpto_cdpmp,
+                    COUNT(DISTINCT CASE WHEN sentence_similarity >= {umbral_similitud} 
+                          THEN recommendation_code END) as Recomendaciones_Implementadas,
+                    AVG(sentence_similarity) as Similitud_Promedio,
+                    COUNT(DISTINCT CASE WHEN recommendation_priority = 1 
+                          AND sentence_similarity >= {umbral_similitud} 
+                          THEN recommendation_code END) as Recomendaciones_Prioritarias
+                FROM datos_principales 
+                WHERE tipo_territorio = 'Municipio'
+                GROUP BY dpto_cdpmp
+            )
+            -- Paso 4: Unir todo
             SELECT 
-                dpto_cdpmp,
-                dpto as Departamento,
-                COUNT(CASE WHEN sentence_similarity >= {umbral_similitud} THEN 1 END) as Oraciones_Umbral,
-                COUNT(*) as Total_Oraciones,  -- Add this line
-                ROUND(
-                    CAST(COUNT(CASE WHEN sentence_similarity >= {umbral_similitud} THEN 1 END) AS FLOAT) / 
-                    CAST(COUNT(*) AS FLOAT) * 100, 2
-                ) as Porcentaje_Umbral,  -- Add this line
-                COUNT(DISTINCT mpio_cdpmp) as Municipios,
-                COUNT(DISTINCT recommendation_code) as Recomendaciones_Implementadas,
-                AVG(sentence_similarity) as Similitud_Promedio,
-                COUNT(CASE WHEN recommendation_priority = 1 THEN 1 END) as Recomendaciones_Prioritarias
-            FROM datos_principales 
-            WHERE tipo_territorio = 'Municipio'  -- Add this line
-            GROUP BY dpto_cdpmp, dpto
-            ORDER BY Porcentaje_Umbral DESC  -- Changed from Oraciones_Umbral
+                s.*,
+                m.Recomendaciones_Implementadas,
+                m.Similitud_Promedio,
+                m.Recomendaciones_Prioritarias
+            FROM stats_departamento s
+            LEFT JOIN metricas_adicionales m ON s.dpto_cdpmp = m.dpto_cdpmp
+            ORDER BY s.Porcentaje_Umbral DESC
         """
 
         return conn.execute(query).df()
 
     except Exception as e:
         st.error(f"Error estadísticas departamentales: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
         return pd.DataFrame()
-
 
 def obtener_ranking_municipios(umbral_similitud: float,
                                solo_politica_publica: bool = True,

@@ -1,11 +1,9 @@
 import streamlit as st
-import requests
 from general_view import render_general_view
 from municipal_view import render_ficha_municipal
 from google_drive_client import (
     conectar_duckdb_parquet,
-    obtener_metadatos_basicos,
-    obtener_estadisticas_departamentales
+    obtener_metadatos_basicos
 )
 
 st.set_page_config(
@@ -14,22 +12,11 @@ st.set_page_config(
     layout="wide"
 )
 
-
-@st.cache_data
-def cargar_geojson():
-    """Cargar datos GeoJSON de Colombia"""
-    try:
-        url = "https://gist.githubusercontent.com/john-guerra/43c7656821069d00dcbc/raw/be6a6e239cd5b5b803c6e7c2ec405b793a9064dd/Colombia.geo.json"
-        response = requests.get(url)
-        return response.json()
-    except Exception as e:
-        st.warning(f"Error cargando GeoJSON: {str(e)}")
-        return None
-
-
 def main():
-    st.title("📊 Dashboard de Similitudes Jerárquicas")
-    st.markdown("---")
+
+    st.markdown("""
+            # 📊 Dashboard de Similitudes Jerárquicas
+                   """)
 
     # Establecer conexión DuckDB
     if 'duckdb_conn' not in st.session_state:
@@ -47,28 +34,66 @@ def main():
         st.error("❌ No se pudieron obtener los metadatos")
         st.stop()
 
-    # Filtros globales
-    st.sidebar.header("🔧 Filtros Globales")
+    st.sidebar.markdown("""
+        # Objetivo del dashboard:
+               """)
 
-    min_similarity = st.sidebar.slider(
-        "Similitud Mínima:",
-        min_value=0.5,
-        max_value=1.0,
-        value=0.65,
-        step=0.01
-    )
+    st.sidebar.markdown(" ")
 
-    # Mostrar estadísticas
-    st.info(
-        f"🔍 **Datos:** {metadatos['total_registros']:,} registros | "
-        f"{metadatos['total_departamentos']} departamentos | "
-        f"{metadatos['total_municipios']} municipios | "
-        f"{metadatos['total_recomendaciones']} recomendaciones"
-    )
+    st.sidebar.markdown("""Sistema que, por medio de algoritmos de similitud semántica, identifica la mención de 75 recomendaciones de la Comisión para el Esclarecimiento de la Verdad (CEV)
+     en los planes de desarrollo territorial (PDT) de 1.028 municipios y 33 departamentos en Colombia.
+    """)
 
-    # Preparar datos departamentales
-    geojson_data = cargar_geojson()
-    dept_data = obtener_estadisticas_departamentales(min_similarity) if geojson_data else None
+    st.sidebar.markdown("---")
+
+    # Instrucciones de uso
+
+    with st.expander("ℹ️ ¿Cómo usar este dashboard?", expanded=False):
+
+        st.markdown("""
+         
+                    ### 📖 ¿Qué es la similitud semántica?
+        
+                    Es una medida que indica **qué tan parecido es el significado** entre dos textos, 
+                    independientemente de las palabras utilizadas. Para este caso, el sistema evalúa qué tan parecido
+                    es el contenido de una recomendación en particular con la oración de un PDT específico.
+                    
+                    Así, podemos identificar cuándo un plan de desarrollo menciona 
+                    una recomendación incluso si no usa las mismas palabras, pero expresa la misma idea.
+                    
+                    **Escala de interpretación:**
+                    - 🟢 **0.80-1.00:** La oración identificada menciona prácticamente lo mismo que la recomendación
+                    - 🟡 **0.65-0.79:** El concepto de la recomendación está claramente presente en la oración
+                    - 🟠 **0.50-0.64:** Hay elementos relacionados pero menos directos en la oración identificada
+                    
+                    **Ejemplo práctico del municipio de Leticia Amazonas:**
+                    
+                    - **Recomendación MCV1:** Diseñar e implementar políticas públicas con enfoque de género para erradicar la discriminación y alcanzar la igualdad de las mujeres en los territorios.
+                    - **Política pública del PDT de Leticia, Amazonas:** Gestión de acciones y movilización de procesos en marco de la política pública de igualdad y equidad de género para la mujer.
+                    - **Similitud:** 0.9. Mencionan prácticamente la misma idea con diferentes palabras.
+                    ---
+        
+                   ### ⚙️ Estructura del dashboard
+
+                   **Vista General (🌎):**
+                   - Mapa interactivo mostrando cobertura por departamento
+                   - Gráfico de barras con las recomendaciones más mencionadas
+                   - Distribución de municipios por número de recomendaciones que son mencionadas y por el número de veces que son mencionadas 
+                   - Análisis por recomendación: Qué municipios mencionan la recomendación seleccionada ordenados por número de menciones
+
+                   **Vista Municipal (🏛️):**
+                   - Análisis detallado de un municipio específico
+                   - Exploración de recomendaciones mencionadas con contexto
+                   - Diccionario completo de las 75 recomendaciones
+
+                   ### ⚙️ Filtros principales
+
+                   **Panel izquierdo (Filtros Globales):**
+                   - **Similitud Mínima:** Ajusta qué tan estricto es el filtro de coincidencias (0.5 = similitud media más coincidencias, 0.9 = similitud muy alta menos coincidencias)
+                     - Recomendado: 0.65 para balance entre cobertura y calidad
+                   """)
+
+    st.markdown("---")
 
     # Navegación
     selected_view = st.segmented_control(
@@ -79,9 +104,9 @@ def main():
 
     # Renderizar vista
     if selected_view == "🌎 General":
-        render_general_view(metadatos, geojson_data, dept_data, min_similarity)
+        render_general_view(metadatos)
     elif selected_view == "🏛️ Municipal":
-        render_ficha_municipal(min_similarity)
+        render_ficha_municipal()
 
 
 if __name__ == "__main__":

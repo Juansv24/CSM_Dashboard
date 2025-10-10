@@ -47,7 +47,6 @@ def create_variable_dictionary():
     }
     return pd.DataFrame(dictionary)
 
-
 def create_ranking_data(df, sentence_threshold, include_policy_only):
     """Crear datos de ranking de municipios"""
     ranking_data = df.copy()
@@ -84,7 +83,6 @@ def create_ranking_data(df, sentence_threshold, include_policy_only):
                                  'Cat_IICA', 'Grupo_MDM']]
 
     return ranking_data
-
 
 def create_excel_file(filtered_data, ranking_data, dictionary_df):
     """Crear archivo Excel con ranking, datos filtrados y diccionario"""
@@ -127,7 +125,6 @@ def create_excel_file(filtered_data, ranking_data, dictionary_df):
     output.seek(0)
     return output
 
-
 def to_csv_utf8_bom(df):
     """Convertir DataFrame a CSV con codificación UTF-8 BOM"""
     # Crear CSV como string
@@ -135,7 +132,6 @@ def to_csv_utf8_bom(df):
     # Agregar BOM (Byte Order Mark) para UTF-8
     csv_bytes = '\ufeff' + csv_string
     return csv_bytes.encode('utf-8')
-
 
 def mostrar_paginacion_coincidencias(rec_code, level="oraciones"):
     """Mostrar controles de paginación para coincidencias de una recomendación específica"""
@@ -198,11 +194,9 @@ def mostrar_paginacion_coincidencias(rec_code, level="oraciones"):
                 st.session_state[pagina_key] = min(total_paginas, pagina_actual + 1)
                 st.rerun()
 
-
-def render_ficha_municipal(umbral_similitud_global):
+def render_ficha_municipal():
     """Vista municipal optimizada"""
 
-    st.sidebar.markdown("---")
     st.sidebar.markdown("### 🔧 Filtros Municipales")
 
     # Obtener TODOS los territorios de la muestra (sin filtros)
@@ -282,69 +276,6 @@ def render_ficha_municipal(umbral_similitud_global):
         - Seleccione un municipio diferente
         """)
         return
-
-    # Sistema de descarga
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📥 Descargar Datos")
-
-    # Botón 1: Preparar descarga
-    if st.sidebar.button("📊 Preparar Descarga Excel", use_container_width=True):
-        with st.spinner("Generando archivo Excel con 3 pestañas..."):
-            try:
-                # Obtener todos los datos para el ranking
-                all_data = consultar_datos_filtrados(
-                    umbral_similitud=0.0,  # Get all data for ranking
-                    solo_politica_publica=include_policy_only
-                )
-
-                # Crear ranking
-                ranking_data = create_ranking_data(all_data, sentence_threshold, include_policy_only)
-
-                # Crear diccionario
-                dict_df = create_variable_dictionary()
-
-                # Generar archivo Excel
-                excel_file = create_excel_file(high_quality_sentences, ranking_data, dict_df)
-
-                # Guardar en session state
-                st.session_state['excel_ready'] = excel_file
-                st.session_state['umbral_usado'] = sentence_threshold
-                st.session_state['total_registros'] = len(high_quality_sentences)
-
-                st.sidebar.success(f"¡Archivo listo! ({len(high_quality_sentences)} registros filtrados)")
-
-            except Exception as e:
-                st.sidebar.error(f"Error generando archivo: {str(e)}")
-
-    # Botón 2: Descargar (solo aparece si está listo)
-    if 'excel_ready' in st.session_state:
-        from datetime import datetime
-        fecha_actual = datetime.now().strftime("%Y%m%d_%H%M")
-        umbral = st.session_state.get('umbral_usado', sentence_threshold)
-        total_registros = st.session_state.get('total_registros', 0)
-
-        st.sidebar.download_button(
-            label=f"⬇️ Descargar Excel ({total_registros} registros)",
-            data=st.session_state['excel_ready'],
-            file_name=f"Reporte_Municipios_Umbral_{umbral}_{fecha_actual}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            help=f"Excel con ranking, datos filtrados (umbral ≥ {umbral}) y diccionario"
-        )
-
-        # Botón para limpiar y preparar nueva descarga
-        if st.sidebar.button("🔄 Preparar Nueva Descarga", use_container_width=True):
-            if 'excel_ready' in st.session_state:
-                del st.session_state['excel_ready']
-            if 'umbral_usado' in st.session_state:
-                del st.session_state['umbral_usado']
-            if 'total_registros' in st.session_state:
-                del st.session_state['total_registros']
-            st.rerun()
-
-    # Mostrar info si no hay datos
-    if high_quality_sentences.empty and selected_municipality == 'Todos':
-        st.sidebar.info("No hay datos para descargar con el filtro actual")
 
     # Renderizar según selección
     if selected_municipality != 'Todos':

@@ -1,15 +1,50 @@
 import streamlit as st
-import pandas as pd
+import requests
 import plotly.express as px
 from google_drive_client import (
     obtener_ranking_municipios,
     obtener_top_recomendaciones,
-    obtener_municipios_por_recomendacion
+    obtener_municipios_por_recomendacion,
+    obtener_estadisticas_departamentales
 )
+
+@st.cache_data
+def cargar_geojson():
+    """Cargar datos GeoJSON de Colombia"""
+    try:
+        url = "https://gist.githubusercontent.com/john-guerra/43c7656821069d00dcbc/raw/be6a6e239cd5b5b803c6e7c2ec405b793a9064dd/Colombia.geo.json"
+        response = requests.get(url)
+        return response.json()
+    except Exception as e:
+        st.warning(f"Error cargando GeoJSON: {str(e)}")
+        return None
 
 
 def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_similitud=0.65):
     """Renderizar vista general"""
+
+    # Filtros globales
+    st.sidebar.header("🔧 Filtro General")
+
+    min_similarity = st.sidebar.slider(
+        "Similitud Mínima:",
+        min_value=0.5,
+        max_value=1.0,
+        value=0.65,
+        step=0.01
+    )
+
+    # Mostrar estadísticas
+    # st.info(
+    #   f"🔍 **Datos:** {metadatos['total_registros']:,} registros | "
+    #   f"{metadatos['total_departamentos']} departamentos | "
+    #   f"{metadatos['total_municipios']} municipios | "
+    #   f"{metadatos['total_recomendaciones']} recomendaciones"
+    # )
+
+    # Preparar datos departamentales
+    geojson_data = cargar_geojson()
+    dept_data = obtener_estadisticas_departamentales(min_similarity) if geojson_data else None
 
     st.header("📈 Análisis general")
 
@@ -23,13 +58,13 @@ def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_sim
     with col3:
         if dept_data is not None:
             total_oraciones = dept_data['Oraciones_Umbral'].sum()
-            total_documentos = dept_data['Total_Oraciones'].sum()  # Add this line
+            total_documentos = dept_data['Total_Oraciones'].sum()
             porcentaje_general = (
-                        total_oraciones / total_documentos * 100) if total_documentos > 0 else 0  # Add this line
+                    total_oraciones / total_documentos * 100) if total_documentos > 0 else 0
             st.metric(
                 "Oraciones sobre Umbral",
                 f"{total_oraciones:,}",
-                delta=f"{porcentaje_general:.1f}% del total"  # Add delta showing percentage
+                delta=f"{porcentaje_general:.1f}% del total"
             )
 
     # Mapa coroplético
@@ -41,12 +76,12 @@ def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_sim
     st.markdown("---")
 
     # Estadísticas de recomendaciones
-    _render_recommendations_stats(umbral_similitud, metadatos)
+    _render_recommendations_stats(min_similarity, metadatos)
 
     st.markdown("---")
 
     # Análisis de implementación
-    _render_implementation_analysis(umbral_similitud)
+    _render_implementation_analysis(min_similarity)
 
     st.markdown("---")
 
@@ -61,19 +96,34 @@ def _render_choropleth_map(dept_data, geojson_data):
         dept_data,
         geojson=geojson_data,
         locations='dpto_cdpmp',
-        color='Porcentaje_Umbral',  # Changed from 'Oraciones_Umbral'
+        color='Porcentaje_Umbral',
         color_continuous_scale='viridis',
-        title='Porcentaje de Oraciones sobre Umbral por Departamento',  # Updated title
-        labels={'Porcentaje_Umbral': 'Porcentaje sobre Umbral (%)'},  # Updated label
+        title='Porcentaje de Oraciones sobre Umbral por Departamento',
+        labels={
+            'Porcentaje_Umbral': 'Porcentaje de oraciones sobre el umbral (%)',
+            'Municipios': 'Número de municipios',
+            'Oraciones_Umbral': 'Oraciones sobre el umbral',
+            'Total_Oraciones': 'Total de oraciones'
+        },
         hover_name='Departamento',
         hover_data={
             'Municipios': True,
             'dpto_cdpmp': False,
             'Oraciones_Umbral': ':,d',
-            'Total_Oraciones': ':,d',  # Add this line
-            'Porcentaje_Umbral': ':.1f%'  # Add this line
+            'Total_Oraciones': ':,d',
+            'Porcentaje_Umbral': ':.2f'
         },
         featureidkey="properties.DPTO"
+    )
+
+    # Personalizar el hover template para mayor control
+    fig_map.update_traces(
+        hovertemplate='<b>%{hovertext}</b><br>' +
+                      'Número de Municipios: %{customdata[0]}<br>' +
+                      'Oraciones sobre Umbral: %{customdata[1]:,}<br>' +
+                      'Total de Oraciones: %{customdata[2]:,}<br>' +
+                      'Porcentaje sobre Umbral: %{z:.2f}%<br>' +
+                      '<extra></extra>'
     )
 
     fig_map.update_geos(
