@@ -1,5 +1,6 @@
 import streamlit as st
 from vista_general import render_vista_general
+from vista_departamental import render_ficha_departamental
 from vista_municipal import render_ficha_municipal
 from google_drive_client import (
     conectar_duckdb_parquet,
@@ -103,7 +104,7 @@ def main():
     # Selector de vista
     selected_view = st.segmented_control(
         "Selecciona la vista:",
-        ["🌎 General", "🏛️ Municipal"],
+        ["🌎 General", "🏢 Departamental", "🏛️ Municipal",],
         default="🌎 General"
     )
 
@@ -112,6 +113,8 @@ def main():
         render_vista_general(metadatos)
     elif selected_view == "🏛️ Municipal":
         render_ficha_municipal()
+    elif selected_view == "🏢 Departamental":
+        render_ficha_departamental()
 
 
 if __name__ == "__main__":
