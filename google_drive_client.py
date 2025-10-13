@@ -97,7 +97,11 @@ def consultar_datos_filtrados(umbral_similitud: float,
                               departamento: str = None,
                               municipio: str = None,
                               solo_politica_publica: bool = True,
-                              limite: int = None) -> pd.DataFrame:
+                              limite: int = None,
+                              filtro_pdet: str = "Todos",
+                              filtro_iica: list = None,
+                              filtro_ipm: tuple = (0.0, 100.0),
+                              filtro_mdm: list = None) -> pd.DataFrame:
     """Consultar datos con filtros"""
 
     try:
@@ -131,6 +135,27 @@ def consultar_datos_filtrados(umbral_similitud: float,
             municipio_escaped = municipio.replace("'", "''")
             where_conditions.append(f"mpio = '{municipio_escaped}'")
 
+        # Filtros socioeconómicos
+        # Filtro PDET
+        if filtro_pdet == "Solo PDET":
+            where_conditions.append("PDET = 1")
+        elif filtro_pdet == "Solo No PDET":
+            where_conditions.append("PDET = 0")
+
+        # Filtro IICA
+        if filtro_iica and len(filtro_iica) > 0:
+            iica_list = "','".join(filtro_iica)
+            where_conditions.append(f"Cat_IICA IN ('{iica_list}')")
+
+        # Filtro IPM
+        if filtro_ipm != (0.0, 100.0):
+            where_conditions.append(f"IPM_2018 BETWEEN {filtro_ipm[0]} AND {filtro_ipm[1]}")
+
+        # Filtro MDM
+        if filtro_mdm and len(filtro_mdm) > 0:
+            mdm_list = "','".join(filtro_mdm)
+            where_conditions.append(f"Grupo_MDM IN ('{mdm_list}')")
+
         where_clause = " AND ".join(where_conditions)
         limit_clause = f"LIMIT {limite}" if limite else ""
 
@@ -147,65 +172,109 @@ def consultar_datos_filtrados(umbral_similitud: float,
         st.error(f"Error consulta: {str(e)}")
         return pd.DataFrame()
 
-def obtener_estadisticas_departamentales(umbral_similitud: float) -> pd.DataFrame:
-    """Estadísticas por departamento - Conteo de oraciones únicas"""
+def obtener_estadisticas_departamentales(umbral_similitud: float,
+                                         filtro_pdet: str = "Todos",
+                                         filtro_iica: list = None,
+                                         filtro_ipm: tuple = (0.0, 100.0),
+                                         filtro_mdm: list = None) -> pd.DataFrame:
+    """Estadísticas por departamento - Con MIN, MAX y nombres de municipios"""
 
     try:
         conn = st.session_state.get('duckdb_conn')
         if not conn:
             return pd.DataFrame()
 
+        # Construir condiciones de filtro
+        filtro_conditions = []
+
+        # Filtro PDET
+        if filtro_pdet == "Solo PDET":
+            filtro_conditions.append("PDET = 1")
+        elif filtro_pdet == "Solo No PDET":
+            filtro_conditions.append("PDET = 0")
+
+        # Filtro IICA
+        if filtro_iica and len(filtro_iica) > 0:
+            iica_list = "','".join(filtro_iica)
+            filtro_conditions.append(f"Cat_IICA IN ('{iica_list}')")
+
+        # Filtro IPM
+        if filtro_ipm != (0.0, 100.0):
+            filtro_conditions.append(f"IPM_2018 BETWEEN {filtro_ipm[0]} AND {filtro_ipm[1]}")
+
+        # Filtro MDM
+        if filtro_mdm and len(filtro_mdm) > 0:
+            mdm_list = "','".join(filtro_mdm)
+            filtro_conditions.append(f"Grupo_MDM IN ('{mdm_list}')")
+
+        # Combinar condiciones
+        additional_where = ""
+        if filtro_conditions:
+            additional_where = " AND " + " AND ".join(filtro_conditions)
+
         query = f"""
-            WITH oraciones_unicas AS (
-                -- Paso 1: Para cada oración única (municipio + sentence_id_paragraph), obtener su MEJOR similitud
+            WITH recomendaciones_por_municipio AS (
+                -- Paso 1: Contar cuántas recomendaciones menciona cada municipio
                 SELECT 
                     dpto_cdpmp,
                     dpto,
                     mpio_cdpmp,
-                    sentence_id_paragraph,
-                    MAX(sentence_similarity) as mejor_similitud
+                    mpio,
+                    COUNT(DISTINCT recommendation_code) as num_recomendaciones
                 FROM datos_principales 
                 WHERE tipo_territorio = 'Municipio'
-                GROUP BY dpto_cdpmp, dpto, mpio_cdpmp, sentence_id_paragraph
+                AND sentence_similarity >= {umbral_similitud}
+                {additional_where}
+                GROUP BY dpto_cdpmp, dpto, mpio_cdpmp, mpio
             ),
-            stats_departamento AS (
-                -- Paso 2: Contar oraciones por departamento
+            -- Paso 2: Identificar municipios con min y max por departamento
+            ranking_por_depto AS (
+                SELECT 
+                    *,
+                    ROW_NUMBER() OVER (PARTITION BY dpto_cdpmp ORDER BY num_recomendaciones ASC) as rank_min,
+                    ROW_NUMBER() OVER (PARTITION BY dpto_cdpmp ORDER BY num_recomendaciones DESC) as rank_max
+                FROM recomendaciones_por_municipio
+            ),
+            municipio_min AS (
+                SELECT 
+                    dpto_cdpmp,
+                    mpio as Municipio_Min,
+                    num_recomendaciones as Min_Recomendaciones
+                FROM ranking_por_depto
+                WHERE rank_min = 1
+            ),
+            municipio_max AS (
+                SELECT 
+                    dpto_cdpmp,
+                    mpio as Municipio_Max,
+                    num_recomendaciones as Max_Recomendaciones
+                FROM ranking_por_depto
+                WHERE rank_max = 1
+            ),
+            -- Paso 3: Calcular estadísticas generales
+            stats_generales AS (
                 SELECT 
                     dpto_cdpmp,
                     dpto as Departamento,
-                    COUNT(*) as Total_Oraciones,
-                    COUNT(CASE WHEN mejor_similitud >= {umbral_similitud} THEN 1 END) as Oraciones_Umbral,
-                    ROUND(
-                        CAST(COUNT(CASE WHEN mejor_similitud >= {umbral_similitud} THEN 1 END) AS FLOAT) / 
-                        CAST(COUNT(*) AS FLOAT) * 100, 2
-                    ) as Porcentaje_Umbral,
-                    COUNT(DISTINCT mpio_cdpmp) as Municipios
-                FROM oraciones_unicas
+                    COUNT(DISTINCT mpio_cdpmp) as Municipios,
+                    ROUND(AVG(num_recomendaciones), 0) as Promedio_Recomendaciones
+                FROM recomendaciones_por_municipio
                 GROUP BY dpto_cdpmp, dpto
-            ),
-            metricas_adicionales AS (
-                -- Paso 3: Métricas de recomendaciones (estas sí usan el dataset completo)
-                SELECT 
-                    dpto_cdpmp,
-                    COUNT(DISTINCT CASE WHEN sentence_similarity >= {umbral_similitud} 
-                          THEN recommendation_code END) as Recomendaciones_Implementadas,
-                    AVG(sentence_similarity) as Similitud_Promedio,
-                    COUNT(DISTINCT CASE WHEN recommendation_priority = 1 
-                          AND sentence_similarity >= {umbral_similitud} 
-                          THEN recommendation_code END) as Recomendaciones_Prioritarias
-                FROM datos_principales 
-                WHERE tipo_territorio = 'Municipio'
-                GROUP BY dpto_cdpmp
             )
             -- Paso 4: Unir todo
             SELECT 
-                s.*,
-                m.Recomendaciones_Implementadas,
-                m.Similitud_Promedio,
-                m.Recomendaciones_Prioritarias
-            FROM stats_departamento s
-            LEFT JOIN metricas_adicionales m ON s.dpto_cdpmp = m.dpto_cdpmp
-            ORDER BY s.Porcentaje_Umbral DESC
+                s.dpto_cdpmp,
+                s.Departamento,
+                s.Municipios,
+                s.Promedio_Recomendaciones,
+                mn.Min_Recomendaciones,
+                mn.Municipio_Min,
+                mx.Max_Recomendaciones,
+                mx.Municipio_Max
+            FROM stats_generales s
+            LEFT JOIN municipio_min mn ON s.dpto_cdpmp = mn.dpto_cdpmp
+            LEFT JOIN municipio_max mx ON s.dpto_cdpmp = mx.dpto_cdpmp
+            ORDER BY s.Promedio_Recomendaciones DESC
         """
 
         return conn.execute(query).df()
@@ -216,9 +285,14 @@ def obtener_estadisticas_departamentales(umbral_similitud: float) -> pd.DataFram
         st.error(traceback.format_exc())
         return pd.DataFrame()
 
+
 def obtener_ranking_municipios(umbral_similitud: float,
                                solo_politica_publica: bool = True,
-                               top_n: int = None) -> pd.DataFrame:
+                               top_n: int = None,
+                               filtro_pdet: str = "Todos",
+                               filtro_iica: list = None,
+                               filtro_ipm: tuple = (0.0, 100.0),
+                               filtro_mdm: list = None) -> pd.DataFrame:
     """Ranking de municipios"""
 
     try:
@@ -233,6 +307,34 @@ def obtener_ranking_municipios(umbral_similitud: float,
                 AND (predicted_class = 'Incluida' OR 
                      (predicted_class = 'Excluida' AND prediction_confidence < 0.8))
             """
+
+        # Construir condiciones de filtro socioeconómico
+        filtro_conditions = []
+
+        # Filtro PDET
+        if filtro_pdet == "Solo PDET":
+            filtro_conditions.append("PDET = 1")
+        elif filtro_pdet == "Solo No PDET":
+            filtro_conditions.append("PDET = 0")
+
+        # Filtro IICA
+        if filtro_iica and len(filtro_iica) > 0:
+            iica_list = "','".join(filtro_iica)
+            filtro_conditions.append(f"Cat_IICA IN ('{iica_list}')")
+
+        # Filtro IPM
+        if filtro_ipm != (0.0, 100.0):
+            filtro_conditions.append(f"IPM_2018 BETWEEN {filtro_ipm[0]} AND {filtro_ipm[1]}")
+
+        # Filtro MDM
+        if filtro_mdm and len(filtro_mdm) > 0:
+            mdm_list = "','".join(filtro_mdm)
+            filtro_conditions.append(f"Grupo_MDM IN ('{mdm_list}')")
+
+        # Combinar condiciones adicionales
+        additional_where = ""
+        if filtro_conditions:
+            additional_where = " AND " + " AND ".join(filtro_conditions)
 
         limit_clause = f"LIMIT {top_n}" if top_n else ""
 
@@ -250,6 +352,7 @@ def obtener_ranking_municipios(umbral_similitud: float,
             WHERE sentence_similarity >= {umbral_similitud}
             AND tipo_territorio = 'Municipio'
             {policy_condition}
+            {additional_where}
             GROUP BY mpio_cdpmp, mpio, dpto
             ORDER BY Recomendaciones_Implementadas DESC
             {limit_clause}
@@ -265,7 +368,11 @@ def obtener_ranking_municipios(umbral_similitud: float,
 def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
                                 departamento: str = None,
                                 municipio: str = None,
-                                limite: int = 10) -> pd.DataFrame:
+                                limite: int = 10,
+                                filtro_pdet: str = "Todos",
+                                filtro_iica: list = None,
+                                filtro_ipm: tuple = (0.0, 100.0),
+                                filtro_mdm: list = None) -> pd.DataFrame:
     """Top recomendaciones"""
 
     try:
@@ -285,6 +392,27 @@ def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
         if municipio and municipio != 'Todos':
             municipio_escaped = municipio.replace("'", "''")
             where_conditions.append(f"mpio = '{municipio_escaped}'")
+
+        # Agregar filtros socioeconómicos
+        # Filtro PDET
+        if filtro_pdet == "Solo PDET":
+            where_conditions.append("PDET = 1")
+        elif filtro_pdet == "Solo No PDET":
+            where_conditions.append("PDET = 0")
+
+        # Filtro IICA
+        if filtro_iica and len(filtro_iica) > 0:
+            iica_list = "','".join(filtro_iica)
+            where_conditions.append(f"Cat_IICA IN ('{iica_list}')")
+
+        # Filtro IPM
+        if filtro_ipm != (0.0, 100.0):
+            where_conditions.append(f"IPM_2018 BETWEEN {filtro_ipm[0]} AND {filtro_ipm[1]}")
+
+        # Filtro MDM
+        if filtro_mdm and len(filtro_mdm) > 0:
+            mdm_list = "','".join(filtro_mdm)
+            where_conditions.append(f"Grupo_MDM IN ('{mdm_list}')")
 
         where_clause = " AND ".join(where_conditions)
 
@@ -312,7 +440,11 @@ def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
 
 def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
                                          umbral_similitud: float = 0.6,
-                                         limite: int = 20) -> pd.DataFrame:
+                                         limite: int = 20,
+                                         filtro_pdet: str = "Todos",
+                                         filtro_iica: list = None,
+                                         filtro_ipm: tuple = (0.0, 100.0),
+                                         filtro_mdm: list = None) -> pd.DataFrame:
     """Municipios que más implementan una recomendación específica"""
 
     try:
@@ -321,6 +453,34 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
             return pd.DataFrame()
 
         codigo_escaped = codigo_recomendacion.replace("'", "''")
+
+        # Construir condiciones de filtro
+        filtro_conditions = []
+
+        # Filtro PDET
+        if filtro_pdet == "Solo PDET":
+            filtro_conditions.append("PDET = 1")
+        elif filtro_pdet == "Solo No PDET":
+            filtro_conditions.append("PDET = 0")
+
+        # Filtro IICA
+        if filtro_iica and len(filtro_iica) > 0:
+            iica_list = "','".join(filtro_iica)
+            filtro_conditions.append(f"Cat_IICA IN ('{iica_list}')")
+
+        # Filtro IPM
+        if filtro_ipm != (0.0, 100.0):
+            filtro_conditions.append(f"IPM_2018 BETWEEN {filtro_ipm[0]} AND {filtro_ipm[1]}")
+
+        # Filtro MDM
+        if filtro_mdm and len(filtro_mdm) > 0:
+            mdm_list = "','".join(filtro_mdm)
+            filtro_conditions.append(f"Grupo_MDM IN ('{mdm_list}')")
+
+        # Combinar condiciones
+        additional_where = ""
+        if filtro_conditions:
+            additional_where = " AND " + " AND ".join(filtro_conditions)
 
         query = f"""
             SELECT 
@@ -332,7 +492,8 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
             FROM datos_principales 
             WHERE recommendation_code = '{codigo_escaped}'
             AND sentence_similarity >= {umbral_similitud}
-            AND tipo_territorio = 'Municipio' 
+            AND tipo_territorio = 'Municipio'
+            {additional_where}
             GROUP BY mpio, dpto
             ORDER BY Frecuencia_Oraciones DESC, Similitud_Promedio DESC
             LIMIT {limite}
@@ -343,7 +504,6 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
     except Exception as e:
         st.error(f"Error municipios por recomendación: {str(e)}")
         return pd.DataFrame()
-
 
 def obtener_listas_departamentos_municipios() -> tuple[list, dict]:
     """Listas de territorios usando códigos únicos"""
