@@ -13,7 +13,12 @@ from google_drive_client import (
 
 
 def create_variable_dictionary():
-    """Crear diccionario de variables del dataset"""
+    """
+    Crea diccionario de variables del dataset
+
+    Returns:
+        DataFrame con nombres y descripciones de variables
+    """
     dictionary = {
         'Variable': [
             'mpio', 'dpto', 'recommendation_code', 'recommendation_text',
@@ -28,146 +33,47 @@ def create_variable_dictionary():
             'Código único de la recomendación',
             'Texto completo de la recomendación',
             'Tema o categoría de la recomendación',
-            'Indicador numérico de priorización (0=No, 1=Sí)',
-            'Texto de la oración del PDD municipal',
+            'Indicador de priorización (0=No, 1=Sí)',
+            'Texto de la oración del PDT municipal',
             'Similitud semántica entre oración y recomendación (0-1)',
             'Texto completo del párrafo que contiene la oración',
             'Similitud semántica entre párrafo y recomendación (0-1)',
             'Identificador único del párrafo',
-            'Número de página del documento donde aparece el texto',
-            'Clasificación de ML: Incluida/Excluida como política pública',
+            'Número de página del documento',
+            'Clasificación ML: Incluida/Excluida como política pública',
             'Confianza del modelo de clasificación (0-1)',
             'Índice de Pobreza Multidimensional 2018',
-            'Indicador PDET - Programa de Desarrollo con Enfoque Territorial (0=No, 1=Sí)',
+            'Indicador PDET (0=No, 1=Sí)',
             'Categoría del Índice de Incidencia del Conflicto Armado',
-            'Grupo de Capacidades Iniciales - Medición de Desempeño Municipal',
+            'Grupo de Capacidades Iniciales MDM',
             'Identificador de oración en el documento',
             'Identificador de oración dentro del párrafo'
         ]
     }
     return pd.DataFrame(dictionary)
 
-def create_ranking_data(df, sentence_threshold, include_policy_only):
-    """Crear datos de ranking de municipios"""
-    ranking_data = df.copy()
-
-    # Aplicar filtro de política si está activado
-    if include_policy_only:
-        ranking_data = ranking_data[
-            (ranking_data['predicted_class'] == 'Incluida') |
-            ((ranking_data['predicted_class'] == 'Excluida') & (ranking_data['prediction_confidence'] < 0.8))
-            ]
-
-    # Calcular ranking
-    ranking_data = ranking_data.groupby(['mpio', 'dpto']).agg({
-        'recommendation_code': lambda x: len(set(x[df.loc[x.index, 'sentence_similarity'] >= sentence_threshold])),
-        'sentence_similarity': ['count', 'mean'],
-        'IPM_2018': 'first',
-        'PDET': 'first',
-        'Cat_IICA': 'first',
-        'Grupo_MDM': 'first'
-    }).reset_index()
-
-    # Aplanar columnas
-    ranking_data.columns = ['Municipio', 'Departamento', 'Recomendaciones_Implementadas',
-                            'Total_Oraciones', 'Similitud_Promedio', 'IPM_2018', 'PDET',
-                            'Cat_IICA', 'Grupo_MDM']
-
-    # Ordenar por recomendaciones implementadas
-    ranking_data = ranking_data.sort_values('Recomendaciones_Implementadas', ascending=False)
-    ranking_data['Ranking'] = range(1, len(ranking_data) + 1)
-
-    # Reordenar columnas
-    ranking_data = ranking_data[['Ranking', 'Municipio', 'Departamento', 'Recomendaciones_Implementadas',
-                                 'Total_Oraciones', 'Similitud_Promedio', 'IPM_2018', 'PDET',
-                                 'Cat_IICA', 'Grupo_MDM']]
-
-    return ranking_data
-
-def create_excel_file(filtered_data, ranking_data, dictionary_df):
-    """Crear archivo Excel con ranking, datos filtrados y diccionario"""
-    output = io.BytesIO()
-
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Pestaña 1: Ranking de municipios
-        ranking_data.to_excel(writer, sheet_name='Ranking_Municipios', index=False)
-
-        # Pestaña 2: Datos filtrados
-        filtered_data.to_excel(writer, sheet_name='Datos_Filtrados', index=False)
-
-        # Pestaña 3: Diccionario
-        dictionary_df.to_excel(writer, sheet_name='Diccionario_Variables', index=False)
-
-        # Formatear hojas
-        workbook = writer.book
-        header_fill = PatternFill(start_color='1f77b4', end_color='1f77b4', fill_type='solid')
-        header_font = Font(color='FFFFFF', bold=True)
-
-        # Formatear todas las hojas
-        for sheet_name in ['Ranking_Municipios', 'Datos_Filtrados', 'Diccionario_Variables']:
-            worksheet = writer.sheets[sheet_name]
-            for cell in worksheet[1]:
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = Alignment(horizontal='center')
-
-        # Ajustar ancho de columnas específicas
-        # Ranking
-        ranking_sheet = writer.sheets['Ranking_Municipios']
-        ranking_sheet.column_dimensions['A'].width = 25  # Municipio
-        ranking_sheet.column_dimensions['B'].width = 20  # Departamento
-
-        # Diccionario
-        dict_sheet = writer.sheets['Diccionario_Variables']
-        dict_sheet.column_dimensions['A'].width = 25
-        dict_sheet.column_dimensions['B'].width = 80
-
-    output.seek(0)
-    return output
 
 def to_csv_utf8_bom(df):
-    """Convertir DataFrame a CSV con codificación UTF-8 BOM"""
-    # Crear CSV como string
+    """
+    Convierte DataFrame a CSV con codificación UTF-8 BOM
+
+    Args:
+        df: DataFrame a convertir
+
+    Returns:
+        Bytes del CSV con BOM UTF-8
+    """
     csv_string = df.to_csv(index=False, encoding='utf-8')
-    # Agregar BOM (Byte Order Mark) para UTF-8
     csv_bytes = '\ufeff' + csv_string
     return csv_bytes.encode('utf-8')
 
-def mostrar_paginacion_coincidencias(rec_code, level="oraciones"):
-    """Mostrar controles de paginación para coincidencias de una recomendación específica"""
-    pagina_key = f'pagina_actual_coincidencias_{rec_code}_{level}'
-    total_paginas_key = f'total_paginas_coincidencias_{rec_code}_{level}'
-
-    pagina_actual = st.session_state.get(pagina_key, 1)
-    total_paginas = st.session_state.get(total_paginas_key, 1)
-
-    if total_paginas <= 1:
-        return
-
-    st.markdown("---")
-
-    # Crear columnas para los controles
-    col_prev, col_info, col_next = st.columns([1, 2, 1])
-
-    with col_prev:
-        if st.button("◀ Anterior", disabled=(pagina_actual <= 1), key=f"prev_page_{level}_{rec_code}"):
-            st.session_state[pagina_key] = max(1, pagina_actual - 1)
-            st.rerun()
-
-    with col_info:
-        st.markdown(f"<center>Página {pagina_actual} de {total_paginas}</center>", unsafe_allow_html=True)
-
-    with col_next:
-        if st.button("Siguiente ▶", disabled=(pagina_actual >= total_paginas), key=f"next_page_{level}_{rec_code}"):
-            st.session_state[pagina_key] = min(total_paginas, pagina_actual + 1)
-            st.rerun()
 
 def render_ficha_municipal():
-    """Vista municipal optimizada"""
+    """Renderiza la vista municipal con filtros y análisis detallado"""
 
     st.sidebar.markdown("### 🔧 Filtros Municipales")
 
-    # Obtener TODOS los territorios de la muestra (sin filtros)
+    # Obtener todos los territorios disponibles
     todos_municipios_df = obtener_todos_los_municipios()
     todos_departamentos_df = obtener_todos_los_departamentos()
 
@@ -185,11 +91,10 @@ def render_ficha_municipal():
         index=1 if len(departamentos_lista) > 1 else 0
     )
 
-    # Filtro municipio - SIEMPRE mostrar todos los municipios disponibles
+    # Filtro municipio - siempre mostrar todos los disponibles
     if selected_department == 'Todos':
         municipios_disponibles = todos_municipios_df['Municipio'].unique().tolist()
     else:
-        # Filtrar municipios del departamento seleccionado
         dpto_municipios = todos_municipios_df[
             todos_municipios_df['Departamento'] == selected_department
             ]['Municipio'].tolist()
@@ -203,17 +108,17 @@ def render_ficha_municipal():
         index=1 if len(municipios_lista) > 1 else 0
     )
 
-    # Umbral local
+    # Umbral de similitud
     sentence_threshold = st.sidebar.slider(
         "Umbral de Similitud:",
         min_value=0.0,
         max_value=1.0,
         value=0.65,
         step=0.05,
-        help="Filtro para mostrar solo oraciones con similitud igual o superior al valor seleccionado"
+        help="Filtro para mostrar solo oraciones con similitud igual o superior"
     )
 
-    # Filtro de política
+    # Filtro de política pública
     include_policy_only = st.sidebar.checkbox(
         "Solo secciones de política pública",
         value=True,
@@ -230,7 +135,7 @@ def render_ficha_municipal():
 
     high_quality_sentences = datos_filtrados[datos_filtrados['sentence_similarity'] >= sentence_threshold]
 
-    # VALIDACIÓN PARA MUNICIPIO SIN DATOS
+    # Validación para municipio sin datos
     if selected_municipality != 'Todos' and high_quality_sentences.empty:
         st.warning(f"""
         ⚠️ **Sin datos para mostrar**
@@ -258,9 +163,20 @@ def render_ficha_municipal():
     else:
         _render_vista_comparativa(selected_department, sentence_threshold, datos_filtrados)
 
-def _render_vista_municipio_especifico(municipio, departamento, sentence_threshold, include_policy_only,
-                                       datos_municipio, high_quality_sentences):
-    """Vista específica de municipio"""
+
+def _render_vista_municipio_especifico(municipio, departamento, sentence_threshold,
+                                       include_policy_only, datos_municipio, high_quality_sentences):
+    """
+    Renderiza vista específica de un municipio
+
+    Args:
+        municipio: Nombre del municipio
+        departamento: Nombre del departamento
+        sentence_threshold: Umbral de similitud
+        include_policy_only: Si filtrar solo política pública
+        datos_municipio: Datos del municipio
+        high_quality_sentences: Oraciones de alta calidad
+    """
 
     if datos_municipio.empty:
         st.warning(f"No se encontraron datos para {municipio}")
@@ -283,21 +199,21 @@ def _render_vista_municipio_especifico(municipio, departamento, sentence_thresho
     # Descripción de funcionalidad
     with st.expander("ℹ️ Acerca de este Dashboard", expanded=False):
         st.markdown("""
-            ### 📋 Ficha Municipal - Análisis de Implementación de Recomendaciones
+        ### 📋 Ficha Municipal - Análisis de Implementación de Recomendaciones
 
-            Este dashboard permite analizar el nivel de mención de las recomendaciones de política pública 
-            en los planes de desarrollo (PDD) de los municipios y departamentos de Colombia mediante técnicas de similitud semántica.
+        Este dashboard permite analizar el nivel de mención de las recomendaciones de política pública 
+        en los planes de desarrollo (PDT) de los municipios colombianos mediante similitud semántica.
 
-            **Funcionalidades principales:**
-            - **Filtrado:** Seleccione departamento y municipio para análisis específico
-            - **Umbral de similitud:** Ajuste el nivel mínimo de coincidencia entre recomendaciones y texto municipal (entre más alto más calidad tendrán las coincidencias)
-            - **Ranking:** Compare el desempeño relativo entre municipios
-            - **Análisis detallado:** Explore recomendaciones específicas y oraciones relacionadas
+        **Funcionalidades principales:**
+        - **Filtrado:** Seleccione departamento y municipio para análisis específico
+        - **Umbral de similitud:** Ajuste el nivel mínimo de coincidencia (mayor valor = mejor calidad)
+        - **Ranking:** Compare el desempeño relativo entre municipios
+        - **Análisis detallado:** Explore recomendaciones específicas y oraciones relacionadas
 
-            **Cómo interpretar los resultados:**
-            - Mayor similitud (0 - 1) indica una coincidencia de mejor calidad entre el texto del PDD y las recomendaciones
-            - El ranking se basa en el número total de recomendaciones implementadas
-            """)
+        **Cómo interpretar los resultados:**
+        - Mayor similitud (0-1) indica coincidencia de mejor calidad entre PDT y recomendaciones
+        - El ranking se basa en el número total de recomendaciones implementadas
+        """)
 
     # Información básica
     st.markdown("### 📊 Información Básica")
@@ -306,70 +222,70 @@ def _render_vista_municipio_especifico(municipio, departamento, sentence_thresho
 
     with col1:
         ipm_raw = muni_info.get('IPM_2018', 'N/A')
-
-        # Use pandas to_numeric for robust conversion
         try:
             ipm_numeric = pd.to_numeric(ipm_raw, errors='coerce')
-            if pd.notna(ipm_numeric):
-                ipm = f"{ipm_numeric:.2f}"
-            else:
-                ipm = 'N/A'
+            ipm = f"{ipm_numeric:.2f}" if pd.notna(ipm_numeric) else 'N/A'
         except:
             ipm = 'N/A'
 
         st.markdown(f"""
-            <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 10px; text-align: center; border-left: 4px solid #6c757d;">
-                <h4 style="margin: 0; color: #6c757d;">IPM 2018 
-                    <span title="Índice de Pobreza Multidimensional 2018: Mide la pobreza considerando múltiples dimensiones como educación, salud, trabajo, etc. Valores más altos indican mayor pobreza." 
-                          style="cursor: help; color: #007bff;">ⓘ</span>
-                </h4>
-                <h3 style="margin: 0.5rem 0 0 0; color: #333;">{ipm}</h3>
-            </div>
-            """, unsafe_allow_html=True)
+        <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 10px; text-align: center; border-left: 4px solid #6c757d;">
+            <h4 style="margin: 0; color: #6c757d;">IPM 2018 
+                <span title="Índice de Pobreza Multidimensional 2018: Valores más altos indican mayor pobreza." 
+                      style="cursor: help; color: #007bff;">ⓘ</span>
+            </h4>
+            <h3 style="margin: 0.5rem 0 0 0; color: #333;">{ipm}</h3>
+        </div>
+        """, unsafe_allow_html=True)
 
     with col2:
         pdet = muni_info.get('PDET', 'N/A')
         pdet_color = "#28a745" if pdet == 1 else "#dc3545" if pdet == 0 else "#6c757d"
-        pdet_text = "SÍ" if pdet == 1 else "NO" if pdet == 0 else "N/A"
+        pdet_text = "Sí" if pdet == 1 else "NO" if pdet == 0 else "N/A"
         st.markdown(f"""
-            <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 10px; text-align: center; border-left: 4px solid {pdet_color};">
-                <h4 style="margin: 0; color: #6c757d;">PDET 
-                    <span title="Programa de Desarrollo con Enfoque Territorial: Indica si el municipio está incluido en este programa para territorios afectados por el conflicto." 
-                          style="cursor: help; color: #007bff;">ⓘ</span>
-                </h4>
-                <h3 style="margin: 0.5rem 0 0 0; color: {pdet_color};">{pdet_text}</h3>
-            </div>
-            """, unsafe_allow_html=True)
+        <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 10px; text-align: center; border-left: 4px solid {pdet_color};">
+            <h4 style="margin: 0; color: #6c757d;">PDET 
+                <span title="Programa de Desarrollo con Enfoque Territorial" 
+                      style="cursor: help; color: #007bff;">ⓘ</span>
+            </h4>
+            <h3 style="margin: 0.5rem 0 0 0; color: {pdet_color};">{pdet_text}</h3>
+        </div>
+        """, unsafe_allow_html=True)
 
     with col3:
         cat_iica = muni_info.get('Cat_IICA', 'N/A')
         st.markdown(f"""
-            <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 10px; text-align: center; border-left: 4px solid #17a2b8;">
-                <h4 style="margin: 0; color: #6c757d;">Categoría IICA 
-                    <span title="Índice de Incidencia del Conflicto Armado: Clasifica los municipios en 5 categorías según el nivel de incidencia del conflicto armado, desde baja hasta muy alta incidencia. Incluye variables como acciones armadas, desplazamiento forzado, cultivos de coca y homicidios." 
-                          style="cursor: help; color: #007bff;">ⓘ</span>
-                </h4>
-                <h3 style="margin: 0.5rem 0 0 0; color: #333;">{cat_iica if pd.notna(cat_iica) else 'N/A'}</h3>
-            </div>
-            """, unsafe_allow_html=True)
+        <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 10px; text-align: center; border-left: 4px solid #17a2b8;">
+            <h4 style="margin: 0; color: #6c757d;">Categoría IICA 
+                <span title="Índice de Incidencia del Conflicto Armado: Bajo, Medio, Alto, Muy Alto" 
+                      style="cursor: help; color: #007bff;">ⓘ</span>
+            </h4>
+            <h3 style="margin: 0.5rem 0 0 0; color: #333;">{cat_iica if pd.notna(cat_iica) else 'N/A'}</h3>
+        </div>
+        """, unsafe_allow_html=True)
 
     with col4:
         grupo_mdm = muni_info.get('Grupo_MDM', 'N/A')
         st.markdown(f"""
-            <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 10px; text-align: center; border-left: 4px solid #ffc107;">
-                <h4 style="margin: 0; color: #6c757d;">Grupo MDM 
-                    <span title="Grupo de Capacidades Iniciales de la Medición de Desempeño Municipal: Clasifica los municipios en 6 categorías según sus capacidades económicas, urbanas y de recursos. La clasificación va desde C (capitales) con las mayores capacidades, seguida de G1, G2, G3, G4, hasta G5 con las menores capacidades iniciales." 
-                          style="cursor: help; color: #007bff;">ⓘ</span>
-                </h4>
-                <h3 style="margin: 0.5rem 0 0 0; color: #333;">{grupo_mdm if pd.notna(grupo_mdm) else 'N/A'}</h3>
-            </div>
-            """, unsafe_allow_html=True)
+        <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 10px; text-align: center; border-left: 4px solid #ffc107;">
+            <h4 style="margin: 0; color: #6c757d;">Grupo MDM 
+                <span title="Capacidades Iniciales: C (mayor) hasta G5 (menor)" 
+                      style="cursor: help; color: #007bff;">ⓘ</span>
+            </h4>
+            <h3 style="margin: 0.5rem 0 0 0; color: #333;">{grupo_mdm if pd.notna(grupo_mdm) else 'N/A'}</h3>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("---")
 
     # Análisis de implementación
-    _render_analisis_implementacion_municipio(datos_municipio, high_quality_sentences, municipio, sentence_threshold,
-                                              include_policy_only)
+    _render_analisis_implementacion_municipio(
+        datos_municipio,
+        high_quality_sentences,
+        municipio,
+        sentence_threshold,
+        include_policy_only
+    )
 
     st.markdown("---")
 
@@ -383,7 +299,14 @@ def _render_vista_municipio_especifico(municipio, departamento, sentence_thresho
 
 
 def _render_vista_comparativa(selected_department, sentence_threshold, datos_comparativos):
-    """Vista comparativa de múltiples municipios"""
+    """
+    Renderiza vista comparativa de múltiples municipios
+
+    Args:
+        selected_department: Departamento seleccionado
+        sentence_threshold: Umbral de similitud
+        datos_comparativos: Datos para comparación
+    """
 
     st.markdown(f"""
     <div style="background: linear-gradient(90deg, #6c757d 0%, #495057 100%); 
@@ -417,16 +340,23 @@ def _render_vista_comparativa(selected_department, sentence_threshold, datos_com
     st.info("💡 Seleccione un municipio específico para ver el reporte detallado")
 
 
-def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sentences, municipio, sentence_threshold,
-                                              include_policy_only):
-    """Análisis de implementación para municipio específico"""
+def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sentences,
+                                              municipio, sentence_threshold, include_policy_only):
+    """
+    Renderiza análisis de implementación para municipio específico
+
+    Args:
+        datos_municipio: Datos del municipio
+        high_quality_sentences: Oraciones de alta calidad
+        municipio: Nombre del municipio
+        sentence_threshold: Umbral de similitud
+        include_policy_only: Si filtrar solo política pública
+    """
 
     st.markdown("### 📈 Análisis de Implementación")
 
     # Calcular métricas
     recomendaciones_implementadas = high_quality_sentences['recommendation_code'].nunique()
-
-    # Recomendaciones prioritarias implementadas
     recomendaciones_prioritarias = high_quality_sentences[
         high_quality_sentences['recommendation_priority'] == 1
         ]['recommendation_code'].nunique()
@@ -452,35 +382,34 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
     with col1:
         ranking_text = f"{ranking_position}/{total_municipios}" if ranking_position != "N/A" else "N/A"
         st.markdown(f"""
-            <div style="background-color: #fff3e0; padding: 1.5rem; border-radius: 10px; text-align: center;">
-                <h2 style="margin: 0; color: #EF6C00; font-size: 2.5rem;">{ranking_text}</h2>
-                <p style="margin: 0.5rem 0 0 0; color: #EF6C00; font-weight: 500;">Ranking</p>
-            </div>
-            """, unsafe_allow_html=True)
+        <div style="background-color: #fff3e0; padding: 1.5rem; border-radius: 10px; text-align: center;">
+            <h2 style="margin: 0; color: #EF6C00; font-size: 2.5rem;">{ranking_text}</h2>
+            <p style="margin: 0.5rem 0 0 0; color: #EF6C00; font-weight: 500;">Ranking</p>
+        </div>
+        """, unsafe_allow_html=True)
 
     with col2:
         recs_text = f"{recomendaciones_implementadas}/75"
         st.markdown(f"""
-            <div style="background-color: #e3f2fd; padding: 1.5rem; border-radius: 10px; text-align: center;">
-                <h2 style="margin: 0; color: #1976d2; font-size: 2.5rem;">{recs_text}</h2>
-                <p style="margin: 0.5rem 0 0 0; color: #1976d2; font-weight: 500;">Recomendaciones Implementadas</p>
-            </div>
-            """, unsafe_allow_html=True)
+        <div style="background-color: #e3f2fd; padding: 1.5rem; border-radius: 10px; text-align: center;">
+            <h2 style="margin: 0; color: #1976d2; font-size: 2.5rem;">{recs_text}</h2>
+            <p style="margin: 0.5rem 0 0 0; color: #1976d2; font-weight: 500;">Recomendaciones Implementadas</p>
+        </div>
+        """, unsafe_allow_html=True)
 
     with col3:
         st.markdown(f"""
-            <div style="background-color: #e8f5e8; padding: 1.5rem; border-radius: 10px; text-align: center;">
-                <h2 style="margin: 0; color: #388e3c; font-size: 2.5rem;">{recomendaciones_prioritarias}/45</h2>
-                <p style="margin: 0.5rem 0 0 0; color: #388e3c; font-weight: 500;">Prioritarias Implementadas</p>
-            </div>
-            """, unsafe_allow_html=True)
+        <div style="background-color: #e8f5e8; padding: 1.5rem; border-radius: 10px; text-align: center;">
+            <h2 style="margin: 0; color: #388e3c; font-size: 2.5rem;">{recomendaciones_prioritarias}/45</h2>
+            <p style="margin: 0.5rem 0 0 0; color: #388e3c; font-weight: 500;">Prioritarias Implementadas</p>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Top 5 Recomendaciones por Frecuencia
     if not high_quality_sentences.empty:
         st.markdown(" ")
         st.markdown(" ")
 
-        # Header con botón de descarga
         col_header, col_download = st.columns([4, 1])
         with col_header:
             st.markdown("### Top 5 Recomendaciones más Frecuentes")
@@ -504,7 +433,6 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
                     use_container_width=True
                 )
 
-            # Gráfico
             fig_freq = px.bar(
                 freq_analysis,
                 x='Frecuencia',
@@ -516,11 +444,7 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
                 color_continuous_scale='blues',
                 hover_data={'Texto': True, 'Frecuencia': True}
             )
-            fig_freq.update_layout(
-                height=400,
-                showlegend=False,
-                coloraxis_showscale=False
-            )
+            fig_freq.update_layout(height=400, showlegend=False, coloraxis_showscale=False)
             st.plotly_chart(fig_freq, use_container_width=True)
 
         # Implementación por Tema
@@ -546,14 +470,13 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
                         use_container_width=True
                     )
 
-                # Gráfico
                 fig_heatmap = px.bar(
                     topic_analysis,
                     x='Recomendaciones_Implementadas',
                     y='Tema',
                     orientation='h',
                     title='Recomendaciones mencionadas al menos una vez por tema',
-                    labels={'Recomendaciones_Implementadas': 'Número de recomendaciones mencionadas', 'Tema': ''},
+                    labels={'Recomendaciones_Implementadas': 'Número de recomendaciones', 'Tema': ''},
                     color='Recomendaciones_Implementadas',
                     color_continuous_scale='viridis'
                 )
@@ -568,7 +491,12 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
 
 
 def _render_analisis_detallado_recomendaciones(high_quality_sentences):
-    """Análisis detallado de recomendaciones con pestañas jerárquicas"""
+    """
+    Renderiza análisis detallado de recomendaciones con pestañas jerárquicas
+
+    Args:
+        high_quality_sentences: Oraciones de alta calidad filtradas
+    """
 
     st.markdown("### 🔍 Análisis detallado de recomendaciones")
 
@@ -597,17 +525,16 @@ def _render_analisis_detallado_recomendaciones(high_quality_sentences):
             # Pestañas de navegación jerárquica
             tab = st.segmented_control(
                 "Nivel de análisis:",
-                ["📝 Párrafos", "💬 Oraciones"],
+                ["📄 Párrafos", "💬 Oraciones"],
                 selection_mode="single",
                 default="💬 Oraciones",
                 key="hierarchy_tabs"
             )
 
             # PESTAÑA 1: NIVEL DE PÁRRAFO
-            if tab == "📝 Párrafos":
+            if tab == "📄 Párrafos":
                 st.markdown("**Análisis por Párrafos:**")
 
-                # Agrupar por párrafo y calcular similitud a nivel de párrafo
                 paragraph_analysis = rec_data.groupby(['paragraph_id', 'paragraph_text']).agg({
                     'paragraph_similarity': 'first',
                     'page_number': 'first',
@@ -616,49 +543,41 @@ def _render_analisis_detallado_recomendaciones(high_quality_sentences):
                 }).reset_index()
 
                 paragraph_analysis.columns = ['ID_Párrafo', 'Texto_Párrafo', 'Similitud_Párrafo', 'Página',
-                                              'Num_Oraciones', 'Similitud_Prom', 'Similitud_Max',
-                                              'Clasificación_ML']
+                                              'Num_Oraciones', 'Similitud_Prom', 'Similitud_Max', 'Clasificación_ML']
                 paragraph_analysis = paragraph_analysis.sort_values('Similitud_Prom', ascending=False)
 
-                # PAGINACIÓN PARA PÁRRAFOS
+                # Paginación para párrafos
                 coincidencias_por_pagina = 5
                 total_coincidencias = len(paragraph_analysis)
                 total_paginas = max(1, (total_coincidencias - 1) // coincidencias_por_pagina + 1)
 
-                # Inicializar página actual para párrafos de esta recomendación
                 pagina_key = f'pagina_actual_coincidencias_{selected_rec_code}_parrafos'
                 if pagina_key not in st.session_state:
                     st.session_state[pagina_key] = 1
 
-                # Validar que la página actual no exceda el total
                 if st.session_state[pagina_key] > total_paginas:
                     st.session_state[pagina_key] = 1
 
                 pagina_actual = st.session_state[pagina_key]
 
-                # Aplicar paginación
                 inicio = (pagina_actual - 1) * coincidencias_por_pagina
                 fin = inicio + coincidencias_por_pagina
                 paragraph_analysis_paginado = paragraph_analysis.iloc[inicio:fin]
 
-                # Guardar en session state para controles de paginación
-                st.session_state[f'total_paginas_coincidencias_{selected_rec_code}_parrafos'] = total_paginas
-
-                # Mostrar información de paginación
                 st.write(
                     f"📋 Mostrando {len(paragraph_analysis_paginado)} de {total_coincidencias} párrafos (Página {pagina_actual} de {total_paginas})")
 
-                # Mostrar párrafos paginados
                 for idx, row in paragraph_analysis_paginado.iterrows():
                     with st.expander(
                             f"Párrafo {row['ID_Párrafo']} - Similitud Promedio: {row['Similitud_Prom']:.3f}",
-                            expanded=idx == paragraph_analysis_paginado.index[0]):
+                            expanded=idx == paragraph_analysis_paginado.index[0]
+                    ):
                         col1, col2 = st.columns([3, 1])
 
                         with col1:
                             st.write("**Contenido del Párrafo:**")
-                            para_text = row['Texto_Párrafo'][:800] + "..." if len(
-                                row['Texto_Párrafo']) > 800 else row['Texto_Párrafo']
+                            para_text = row['Texto_Párrafo'][:800] + "..." if len(row['Texto_Párrafo']) > 800 else row[
+                                'Texto_Párrafo']
                             st.write(para_text)
 
                         with col2:
@@ -667,7 +586,7 @@ def _render_analisis_detallado_recomendaciones(high_quality_sentences):
                             st.write(f"**ID Párrafo:** {row['ID_Párrafo']}")
                             st.write(f"**Similitud Párrafo:** {row['Similitud_Párrafo']:.3f}")
 
-                # CONTROLES DE PAGINACIÓN - Siempre mostrar si hay más de 1 página
+                # Controles de paginación
                 if total_paginas > 1:
                     st.markdown("---")
                     col_prev, col_info, col_next = st.columns([1, 2, 1])
@@ -689,33 +608,29 @@ def _render_analisis_detallado_recomendaciones(high_quality_sentences):
                             st.rerun()
 
             # PESTAÑA 2: NIVEL DE ORACIÓN
-            else:  # "💬 Oraciones"
+            else:
                 st.markdown("**Análisis por Oraciones:**")
 
                 sentence_analysis = rec_data.sort_values('sentence_similarity', ascending=False)
 
-                # PAGINACIÓN PARA ORACIONES
+                # Paginación para oraciones
                 coincidencias_por_pagina = 5
                 total_coincidencias = len(sentence_analysis)
                 total_paginas = max(1, (total_coincidencias - 1) // coincidencias_por_pagina + 1)
 
-                # Inicializar página actual para oraciones de esta recomendación
                 pagina_key = f'pagina_actual_coincidencias_{selected_rec_code}_oraciones'
                 if pagina_key not in st.session_state:
                     st.session_state[pagina_key] = 1
 
-                # Validar que la página actual no exceda el total
                 if st.session_state[pagina_key] > total_paginas:
                     st.session_state[pagina_key] = 1
 
                 pagina_actual = st.session_state[pagina_key]
 
-                # Aplicar paginación
                 inicio = (pagina_actual - 1) * coincidencias_por_pagina
                 fin = inicio + coincidencias_por_pagina
                 sentence_analysis_paginado = sentence_analysis.iloc[inicio:fin]
 
-                # Mostrar información de paginación
                 st.write(
                     f"📋 Mostrando {len(sentence_analysis_paginado)} de {total_coincidencias} oraciones (Página {pagina_actual} de {total_paginas})")
 
@@ -739,7 +654,7 @@ def _render_analisis_detallado_recomendaciones(high_quality_sentences):
                             st.write(f"**Similitud Oración:** {row['sentence_similarity']:.3f}")
                             st.write(f"**Clasificación ML:** {row['predicted_class']}")
 
-                    # CONTROLES DE PAGINACIÓN - Siempre mostrar si hay más de 1 página
+                # Controles de paginación
                 if total_paginas > 1:
                     st.markdown("---")
                     col_prev, col_info, col_next = st.columns([1, 2, 1])
@@ -765,15 +680,19 @@ def _render_analisis_detallado_recomendaciones(high_quality_sentences):
 
 
 def _render_diccionario_recomendaciones(datos_municipio, municipio, include_policy_only):
-    """Diccionario de recomendaciones con vista de tabla optimizada"""
+    """
+    Renderiza diccionario de recomendaciones con vista de tabla optimizada
+
+    Args:
+        datos_municipio: Datos del municipio
+        municipio: Nombre del municipio
+        include_policy_only: Si filtrar solo política pública
+    """
 
     st.markdown("### 📖 Diccionario de Recomendaciones")
 
-    # Usar datos del municipio específico
-    dict_data = datos_municipio
-
     # Obtener recomendaciones únicas con sus detalles
-    recommendations_dict = dict_data.groupby('recommendation_code').agg({
+    recommendations_dict = datos_municipio.groupby('recommendation_code').agg({
         'recommendation_text': 'first',
         'recommendation_topic': 'first',
         'recommendation_priority': 'first',
@@ -789,16 +708,15 @@ def _render_diccionario_recomendaciones(datos_municipio, municipio, include_poli
 
     with col1:
         search_term = st.text_input(
-            "🔍 Buscar recomendación:",
+            "🔎 Buscar recomendación:",
             placeholder="Ingrese código o palabras clave...",
             help="Busque por código de recomendación o palabras en el texto",
             key=f"search_dict_{municipio}"
         )
 
     with col2:
-        if 'recommendation_topic' in dict_data.columns:
-            available_topics = ['Todos'] + sorted(
-                dict_data['recommendation_topic'].dropna().unique().tolist())
+        if 'recommendation_topic' in datos_municipio.columns:
+            available_topics = ['Todos'] + sorted(datos_municipio['recommendation_topic'].dropna().unique().tolist())
             selected_topic = st.selectbox(
                 "Filtrar por tema:",
                 options=available_topics,
@@ -839,12 +757,10 @@ def _render_diccionario_recomendaciones(datos_municipio, municipio, include_poli
         lambda x: '🔴 Sí' if x == 1 else '⚪ No' if x == 0 else 'N/A'
     )
 
-    # Truncar texto largo para la tabla
     filtered_dict['Texto_Corto'] = filtered_dict['Texto'].apply(
         lambda x: x[:100] + '...' if len(x) > 100 else x
     )
 
-    # Redondear similitudes
     filtered_dict['Similitud_Promedio'] = filtered_dict['Similitud_Promedio'].round(3)
     filtered_dict['Similitud_Máxima'] = filtered_dict['Similitud_Máxima'].round(3)
 
@@ -853,16 +769,13 @@ def _render_diccionario_recomendaciones(datos_municipio, municipio, include_poli
 
     # Mostrar tabla optimizada
     if not filtered_dict.empty:
-        # Columnas a mostrar en la tabla
         display_columns = ['Código', 'Texto_Corto', 'Tema', 'Priorizado',
                            'Total_Menciones', 'Similitud_Promedio', 'Similitud_Máxima']
 
-        # Renombrar columnas para mejor visualización
         display_df = filtered_dict[display_columns].copy()
         display_df.columns = ['Código', 'Descripción', 'Tema', 'Prioritaria',
                               'Menciones', 'Sim. Prom.', 'Sim. Máx.']
 
-        # Mostrar tabla con dataframe interactivo
         st.dataframe(
             display_df,
             use_container_width=True,

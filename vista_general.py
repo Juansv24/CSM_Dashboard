@@ -11,28 +11,29 @@ from google_drive_client import (
 
 @st.cache_data
 def cargar_geojson():
-    """Cargar datos GeoJSON de Colombia"""
+    """Carga datos GeoJSON de Colombia desde URL pública"""
     try:
         url = "https://gist.githubusercontent.com/john-guerra/43c7656821069d00dcbc/raw/be6a6e239cd5b5b803c6e7c2ec405b793a9064dd/Colombia.geo.json"
         response = requests.get(url)
         return response.json()
     except Exception as e:
-        st.warning(f"Error cargando GeoJSON: {str(e)}")
+        st.warning(f"Error cargando GeoJSON departamental: {str(e)}")
         return None
+
 
 @st.cache_data
 def cargar_geojson_municipios():
-    """Cargar GeoJSON de municipios desde archivo local"""
+    """Carga GeoJSON de municipios desde archivo local"""
     try:
         import json
 
-        # Ruta al archivo (ajusta el nombre según tu archivo)
         geojson_path = "Mapa Municipios.geojson"
 
         with open(geojson_path, 'r', encoding='utf-8') as f:
             geojson_data = json.load(f)
 
         return geojson_data
+
     except FileNotFoundError:
         st.error("❌ No se encontró el archivo GeoJSON de municipios")
         return None
@@ -40,31 +41,39 @@ def cargar_geojson_municipios():
         st.error(f"Error cargando GeoJSON municipal: {str(e)}")
         return None
 
+
 def obtener_metadatos_filtrados(umbral_similitud, filtro_pdet, filtro_iica, filtro_mdm):
-    """Obtener métricas básicas aplicando filtros"""
+    """
+    Obtiene métricas básicas aplicando filtros
+
+    Args:
+        umbral_similitud: Similitud mínima
+        filtro_pdet: Filtro PDET
+        filtro_iica: Lista categorías IICA
+        filtro_mdm: Lista grupos MDM
+
+    Returns:
+        Diccionario con estadísticas filtradas
+    """
     try:
         conn = st.session_state.get('duckdb_conn')
         if not conn:
             return {}
 
-        # Construir condiciones de filtro
         where_conditions = [
             f"sentence_similarity >= {umbral_similitud}",
             "tipo_territorio = 'Municipio'"
         ]
 
-        # Filtro PDET
         if filtro_pdet == "Solo PDET":
             where_conditions.append("PDET = 1")
         elif filtro_pdet == "Solo No PDET":
             where_conditions.append("PDET = 0")
 
-        # Filtro IICA
         if filtro_iica and len(filtro_iica) > 0:
             iica_list = "','".join(filtro_iica)
             where_conditions.append(f"Cat_IICA IN ('{iica_list}')")
 
-        # Filtro MDM
         if filtro_mdm and len(filtro_mdm) > 0:
             mdm_list = "','".join(filtro_mdm)
             where_conditions.append(f"Grupo_MDM IN ('{mdm_list}')")
@@ -93,13 +102,22 @@ def obtener_metadatos_filtrados(umbral_similitud, filtro_pdet, filtro_iica, filt
         }
 
     except Exception as e:
-        st.error(f"Error metadatos filtrados: {str(e)}")
+        st.error(f"Error obteniendo metadatos filtrados: {str(e)}")
         return {}
 
-def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_similitud=0.65):
-    """Renderizar vista general"""
 
-    # Filtros globales
+def render_vista_general(metadatos, geojson_data=None, dept_data=None, umbral_similitud=0.65):
+    """
+    Renderiza la vista general del dashboard
+
+    Args:
+        metadatos: Diccionario con metadatos básicos
+        geojson_data: Datos GeoJSON (opcional, se carga si no existe)
+        dept_data: Datos departamentales (opcional, se calcula si no existe)
+        umbral_similitud: Umbral de similitud por defecto
+    """
+
+    # === FILTROS GLOBALES ===
     st.sidebar.header("🔧 Filtro similitud")
 
     min_similarity = st.sidebar.slider(
@@ -113,7 +131,6 @@ def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_sim
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔍 Filtros socioeconómicos")
 
-    # Filtro PDET
     filtro_pdet = st.sidebar.selectbox(
         "Municipios PDET:",
         options=["Todos", "Solo PDET", "Solo No PDET"],
@@ -121,7 +138,6 @@ def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_sim
         help="Programa de Desarrollo con Enfoque Territorial"
     )
 
-    # Filtro Categoría IICA (Conflicto Armado)
     filtro_iica = st.sidebar.multiselect(
         "Categoría IICA:",
         options=["Muy Alto", "Alto", "Medio", "Bajo", "Medio Bajo"],
@@ -129,7 +145,6 @@ def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_sim
         help="Índice de Incidencia del Conflicto Armado"
     )
 
-    # Filtro Grupo MDM
     filtro_mdm = st.sidebar.multiselect(
         "Grupo MDM:",
         options=["C", "G1", "G2", "G3", "G4", "G5"],
@@ -137,15 +152,7 @@ def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_sim
         help="Capacidades Iniciales - Medición de Desempeño Municipal"
     )
 
-    # Mostrar estadísticas
-    # st.info(
-    #   f"🔍 **Datos:** {metadatos['total_registros']:,} registros | "
-    #   f"{metadatos['total_departamentos']} departamentos | "
-    #   f"{metadatos['total_municipios']} municipios | "
-    #   f"{metadatos['total_recomendaciones']} recomendaciones"
-    # )
-
-    # Preparar datos departamentales
+    # === CARGAR DATOS DEPARTAMENTALES ===
     geojson_data = cargar_geojson()
     dept_data = obtener_estadisticas_departamentales(
         min_similarity,
@@ -153,9 +160,10 @@ def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_sim
         filtro_iica=filtro_iica,
         filtro_mdm=filtro_mdm
     ) if geojson_data else None
+
+    # === ANÁLISIS GENERAL ===
     st.header("📈 Análisis general")
 
-    # Obtener metadatos filtrados
     metadatos_filtrados = obtener_metadatos_filtrados(
         min_similarity,
         filtro_pdet,
@@ -214,31 +222,39 @@ def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_sim
 
     st.markdown("---")
 
-    # ANÁLISIS DETALLADO
+    # Análisis detallado por recomendación
     _render_detailed_analysis(
-        umbral_similitud,
+        min_similarity,
         filtro_pdet,
         filtro_iica,
         filtro_mdm
     )
 
-def _render_choropleth_map(dept_data, geojson_data, min_similarity):
-    """Renderizar mapa coroplético - Con municipios MIN y MAX"""
 
-    # Si ya hay un departamento seleccionado, mostrar el mapa municipal
+def _render_choropleth_map(dept_data, geojson_data, min_similarity):
+    """
+    Renderiza mapa coroplético departamental o municipal
+
+    Args:
+        dept_data: DataFrame con datos departamentales
+        geojson_data: Datos GeoJSON
+        min_similarity: Umbral de similitud aplicado
+    """
+
+    # Si hay departamento seleccionado, mostrar mapa municipal
     if st.session_state.get('selected_department_code'):
         _render_municipal_map(st.session_state['selected_department_code'], min_similarity)
         return
 
+    # Calcular rango dinámico para escala de color
     min_valor = dept_data['Promedio_Recomendaciones'].min()
     max_valor = dept_data['Promedio_Recomendaciones'].max()
-
-    # Agregar un pequeño margen (5%) para mejor visualización
     rango = max_valor - min_valor
     margen = rango * 0.05
     min_escala = max(0, min_valor - margen)
     max_escala = min(75, max_valor + margen)
 
+    # Crear mapa
     fig_map = px.choropleth(
         dept_data,
         geojson=geojson_data,
@@ -246,7 +262,7 @@ def _render_choropleth_map(dept_data, geojson_data, min_similarity):
         color='Promedio_Recomendaciones',
         color_continuous_scale='viridis',
         range_color=[min_escala, max_escala],
-        title=f'Promedio de recomendaciones mencionadas por municipio',
+        title='Promedio de recomendaciones mencionadas por municipio',
         hover_name='Departamento',
         hover_data={
             'dpto_cdpmp': False,
@@ -263,11 +279,10 @@ def _render_choropleth_map(dept_data, geojson_data, min_similarity):
                      'Max_Recomendaciones', 'Municipio_Max']
     )
 
-    # Personalizar el hover template
     fig_map.update_traces(
         hovertemplate='<b>%{hovertext}</b><br><br>' +
                       'Número de Municipios: %{customdata[0]}<br>' +
-                      'Promedio recomendaciones mencionadas: %{customdata[1]:.0f}<br><br>' +
+                      'Promedio recomendaciones: %{customdata[1]:.0f}<br><br>' +
                       '<b>Mínimo:</b> %{customdata[2]:.0f} (%{customdata[3]})<br>' +
                       '<b>Máximo:</b> %{customdata[4]:.0f} (%{customdata[5]})<br>' +
                       '<extra></extra>'
@@ -287,10 +302,8 @@ def _render_choropleth_map(dept_data, geojson_data, min_similarity):
     with st.expander("🗺️ Ver detalle municipal por departamento", expanded=False):
         st.markdown("Seleccione un departamento para explorar sus municipios:")
 
-        # Ordenar por promedio (descendente)
         dept_data_sorted = dept_data.sort_values('Promedio_Recomendaciones', ascending=False)
 
-        # Crear grid de botones (4 columnas)
         cols_per_row = 4
         rows_needed = (len(dept_data_sorted) + cols_per_row - 1) // cols_per_row
 
@@ -304,7 +317,6 @@ def _render_choropleth_map(dept_data, geojson_data, min_similarity):
                     dept_row = dept_data_sorted.iloc[dept_idx]
                     dept_name = dept_row['Departamento']
                     dept_code = dept_row['dpto_cdpmp']
-                    promedio = dept_row['Promedio_Recomendaciones']
 
                     with cols[col_idx]:
                         if st.button(
@@ -315,20 +327,27 @@ def _render_choropleth_map(dept_data, geojson_data, min_similarity):
                             st.session_state['selected_department_code'] = dept_code
                             st.rerun()
 
+
 def _render_municipal_map(dpto_code, min_similarity):
-    """Renderizar mapa de municipios de un departamento específico"""
+    """
+    Renderiza mapa de municipios de un departamento específico
+
+    Args:
+        dpto_code: Código del departamento
+        min_similarity: Umbral de similitud
+    """
 
     st.markdown("---")
 
-    # Botón para cerrar PRIMERO - antes de cualquier processing
+    # Botón para volver
     col1, col2 = st.columns([1, 5])
     with col1:
         if st.button("◀ Volver", use_container_width=True):
-            st.session_state['selected_department_code'] = None  # ← Limpiar en lugar de delete
+            st.session_state['selected_department_code'] = None
             st.rerun()
 
     with col2:
-        st.subheader(f"🗺️ Detalle Municipal")
+        st.subheader("🗺️ Detalle Municipal")
 
     conn = st.session_state.get('duckdb_conn')
     if not conn:
@@ -343,7 +362,7 @@ def _render_municipal_map(dpto_code, min_similarity):
     # Normalizar código del departamento
     dpto_code_normalized = str(dpto_code).zfill(2)
 
-    # Obtener datos municipales del departamento
+    # Obtener datos municipales
     query = f"""
         SELECT 
             mpio_cdpmp,
@@ -362,7 +381,7 @@ def _render_municipal_map(dpto_code, min_similarity):
     municipal_data = conn.execute(query).df()
 
     if municipal_data.empty:
-        st.warning(f"⚠️ No hay datos municipales disponibles")
+        st.warning("⚠️ No hay datos municipales disponibles")
         return
 
     # Filtrar GeoJSON
@@ -375,7 +394,7 @@ def _render_municipal_map(dpto_code, min_similarity):
     }
 
     if len(geojson_filtered['features']) == 0:
-        st.warning(f"⚠️ No se encontraron geometrías municipales")
+        st.warning("⚠️ No se encontraron geometrías municipales")
         st.dataframe(
             municipal_data[['Municipio', 'Num_Recomendaciones', 'Similitud_Promedio']],
             use_container_width=True,
@@ -386,7 +405,7 @@ def _render_municipal_map(dpto_code, min_similarity):
     # Normalizar códigos municipales
     municipal_data['mpio_cdpmp_normalized'] = municipal_data['mpio_cdpmp'].astype(str).str.zfill(5)
 
-    # Crear mapa
+    # Crear mapa municipal
     fig_municipal = px.choropleth(
         municipal_data,
         geojson=geojson_filtered,
@@ -401,8 +420,8 @@ def _render_municipal_map(dpto_code, min_similarity):
             'Similitud_Promedio': ':.3f'
         },
         featureidkey="properties.MPIO_CCNCT",
-        labels={  
-            'Num_Recomendaciones': 'Número de recomendaciones mencionadas',
+        labels={
+            'Num_Recomendaciones': 'Número de recomendaciones',
             'Similitud_Promedio': 'Similitud promedio'
         }
     )
@@ -417,7 +436,7 @@ def _render_municipal_map(dpto_code, min_similarity):
         margin={"r": 0, "t": 50, "l": 0, "b": 0}
     )
 
-    st.plotly_chart(fig_municipal, use_container_width=True, key="mapa_municipal")  # ← Agregar key
+    st.plotly_chart(fig_municipal, use_container_width=True, key="mapa_municipal")
 
     # Tabla complementaria
     st.dataframe(
@@ -426,12 +445,21 @@ def _render_municipal_map(dpto_code, min_similarity):
         hide_index=True
     )
 
+
 def _render_recommendations_stats(umbral_similitud, metadatos, filtro_pdet, filtro_iica, filtro_mdm):
-    """Estadísticas de recomendaciones"""
+    """
+    Renderiza estadísticas de recomendaciones
 
-    st.subheader("📋 Estadísticas de recomendaciones mecionadas a nivel nacional")
+    Args:
+        umbral_similitud: Umbral de similitud
+        metadatos: Metadatos básicos
+        filtro_pdet: Filtro PDET
+        filtro_iica: Lista categorías IICA
+        filtro_mdm: Lista grupos MDM
+    """
 
-    # Obtener metadatos filtrados
+    st.subheader("📋 Estadísticas de recomendaciones mencionadas a nivel nacional")
+
     metadatos_filtrados = obtener_metadatos_filtrados(
         umbral_similitud,
         filtro_pdet,
@@ -454,8 +482,17 @@ def _render_recommendations_stats(umbral_similitud, metadatos, filtro_pdet, filt
 
     st.progress(implementation_rate / 100)
 
+
 def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro_mdm):
-    """Análisis de implementación"""
+    """
+    Renderiza análisis de implementación con gráficos
+
+    Args:
+        umbral_similitud: Umbral de similitud
+        filtro_pdet: Filtro PDET
+        filtro_iica: Lista categorías IICA
+        filtro_mdm: Lista grupos MDM
+    """
 
     st.subheader("📈 Análisis general de mención")
 
@@ -480,18 +517,17 @@ def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, 
                 title='Top 10 recomendaciones por frecuencia de mención',
                 labels={
                     'Frecuencia_Oraciones': 'Frecuencia mención',
-                    'Código': 'Código de la recomendación'
+                    'Codigo': 'Código'
                 },
                 color='Frecuencia_Oraciones',
                 color_continuous_scale='viridis'
             )
             fig_top.update_layout(height=500, showlegend=False, coloraxis_showscale=False)
             fig_top.update_xaxes(title_text="Frecuencia mención")
-            fig_top.update_yaxes(title_text="Código de  recomendación")
+            fig_top.update_yaxes(title_text="Código de recomendación")
             st.plotly_chart(fig_top, use_container_width=True)
 
     with col2:
-        # Ranking municipios
         # Ranking municipios
         ranking_municipios = obtener_ranking_municipios(
             umbral_similitud=umbral_similitud,
@@ -509,10 +545,10 @@ def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, 
                 ranking_municipios,
                 x='Recomendaciones_Implementadas',
                 y='Total_Oraciones',
-                title='Municipios: Recomendaciones mencionadas vs frecuencia de las menciones',
+                title='Municipios: Recomendaciones vs frecuencia de menciones',
                 labels={
                     'Recomendaciones_Implementadas': 'Recomendaciones mencionadas',
-                    'Total_Oraciones': 'Frecuencia de las  menciones'
+                    'Total_Oraciones': 'Frecuencia de menciones'
                 },
                 hover_data=['Municipio', 'Departamento']
             )
@@ -520,13 +556,21 @@ def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, 
             fig_scatter.add_vline(x=avg_implementations, line_dash="dot", line_color="red")
             fig_scatter.add_hline(y=avg_oraciones, line_dash="dot", line_color="red")
             fig_scatter.update_xaxes(title_text="Recomendaciones mencionadas")
-            fig_scatter.update_yaxes(title_text="Frecuencia de las menciones")
-
+            fig_scatter.update_yaxes(title_text="Frecuencia de menciones")
             fig_scatter.update_layout(height=500)
             st.plotly_chart(fig_scatter, use_container_width=True)
 
+
 def _render_detailed_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro_mdm):
-    """Análisis detallado por recomendación"""
+    """
+    Renderiza análisis detallado por recomendación con paginación
+
+    Args:
+        umbral_similitud: Umbral de similitud
+        filtro_pdet: Filtro PDET
+        filtro_iica: Lista categorías IICA
+        filtro_mdm: Lista grupos MDM
+    """
 
     st.subheader("🔍 Análisis por recomendación")
 
@@ -543,7 +587,7 @@ def _render_detailed_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro
         st.warning("No hay recomendaciones disponibles")
         return
 
-    # Selector de recomendación (sin key fijo)
+    # Selector de recomendación
     selected_rec = st.selectbox(
         "Selecciona una recomendación:",
         options=top_recs['Codigo'].tolist(),
@@ -555,7 +599,6 @@ def _render_detailed_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro
         pagina_key = f'pagina_{selected_rec}'
         if pagina_key not in st.session_state:
             st.session_state[pagina_key] = 1
-            # Limpiar páginas de otras recomendaciones para evitar conflictos
             keys_to_remove = [k for k in st.session_state.keys() if k.startswith('pagina_') and k != pagina_key]
             for k in keys_to_remove:
                 del st.session_state[k]
@@ -580,9 +623,9 @@ def _render_detailed_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro
         )
 
         if not municipios_impl.empty:
-            # Filtro de búsqueda (key único por recomendación)
+            # Filtro de búsqueda
             search_term = st.text_input(
-                "🔍 Buscar municipio:",
+                "🔎 Buscar municipio:",
                 placeholder="Escriba el nombre del municipio...",
                 key=f"search_{selected_rec}"
             )
@@ -591,7 +634,6 @@ def _render_detailed_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro
             if search_term:
                 mask = municipios_impl['Municipio'].str.contains(search_term, case=False, na=False)
                 municipios_filtered = municipios_impl[mask]
-                # Resetear página cuando se busca
                 st.session_state[pagina_key] = 1
             else:
                 municipios_filtered = municipios_impl
@@ -603,27 +645,23 @@ def _render_detailed_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro
 
             pagina_actual = st.session_state[pagina_key]
 
-            # Validar página actual
             if pagina_actual > total_paginas:
                 st.session_state[pagina_key] = 1
                 pagina_actual = 1
 
-            # Aplicar paginación
             inicio = (pagina_actual - 1) * municipios_por_pagina
             fin = inicio + municipios_por_pagina
             municipios_pagina = municipios_filtered.iloc[inicio:fin]
 
-            # Mostrar info de paginación
             st.info(
                 f"📊 Mostrando {len(municipios_pagina)} de {total_municipios} municipios (Página {pagina_actual} de {total_paginas})")
 
-            # Mostrar municipios con tarjetas HTML
             st.markdown("**Municipios que implementan esta recomendación:**")
 
+            # Mostrar municipios con tarjetas
             for idx, (_, row) in enumerate(municipios_pagina.iterrows()):
                 ranking_pos = inicio + idx + 1
 
-                # Crear tarjeta estilizada
                 st.markdown(f"""
                 <div style="background-color: #f8f9fa; padding: 1rem; margin: 0.5rem 0; border-radius: 8px; border-left: 4px solid #007bff;">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
