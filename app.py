@@ -76,21 +76,31 @@ def main():
                    ### ⚙️ Estructura del dashboard
 
                    **Vista General (🌎):**
-                   - Mapa interactivo mostrando mención promedio por municipio a nivel departamental
-                   - Gráfico de barras con las recomendaciones más mencionadas
-                   - Distribución de municipios por número de recomendaciones que son mencionadas y por el número de veces que son mencionadas 
+                   - Mapa interactivo mostrando número de recomendaciones implementadas a nivel municipal y departamental en Colombia.
+                   - Gráfico de barras con las recomendaciones más mencionadas.
+                   - Distribución de municipios por número de recomendaciones mencionadas y por frecuencia de mención. 
                    - Análisis por recomendación: Qué municipios mencionan la recomendación seleccionada ordenados por número de menciones
 
                    **Vista Municipal (🏛️):**
-                   - Análisis detallado de un municipio específico
-                   - Exploración de recomendaciones mencionadas con contexto
+                   - Información socioeconómica del municipio:
+                        - Índice de pobreza multidimensional (IPM 2018): Toma valores entre 0 y 100, donde valores más altos indican mayor incidencia de pobreza.
+                        - Identificador si el municipio es PDET: Toma el valor de "Sí"  si el municipio es PDET y "No" de lo contrario.
+                        - Categoría del Índice de Incidencia del Conflicto Armado (IICA): Puede tomar 5 valores según la incidencia del conflicto: Bajo, Medio Bajo, Medio, Alto y Muy Alto.
+                        - Nivel de capcidades iniciales MDM): La clasificación va desde C (capitales) con las mayores capacidades, seguida de G1, G2, G3, G4, hasta G5 con las menores capacidades iniciales.
+                   
+                   - Ranking del municipipio según las recomendaciones que menciona en su PDT.
+                   - Gráfic de barras que explora las recomendaciones más mencionadas y los temas más mencionados.
+                   - Análisis detallado por recomendación
                    - Diccionario completo de las 75 recomendaciones
 
                    ### ⚙️ Filtros principales
 
                    **Panel izquierdo (Filtros Globales):**
-                   - **Similitud Mínima:** Ajusta qué tan estricto es el filtro de coincidencias (0.5 = similitud media más coincidencias, 0.9 = similitud muy alta menos coincidencias)
-                     - Recomendado: 0.65 para balance entre cobertura y calidad
+                   - **Umbral de similitud:** Ajusta qué tan estricto es el filtro de coincidencias (0.5 = similitud media más coincidencias, 0.9 = similitud muy alta menos coincidencias)
+                     - Recomendado: 0.65 para balance entre cobertura y calidad.
+                   - Filtros socioeconómicos
+                
+                     
                    """)
 
     st.markdown("---")
