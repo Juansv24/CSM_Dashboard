@@ -146,53 +146,21 @@ def mostrar_paginacion_coincidencias(rec_code, level="oraciones"):
 
     st.markdown("---")
 
-    # Crear columnas para centrar la paginación
-    col1, col2, col3 = st.columns([1, 2, 1])
+    # Crear columnas para los controles
+    col_prev, col_info, col_next = st.columns([1, 2, 1])
 
-    with col2:
-        # Crear botones de paginación
-        cols = st.columns([1, 1, 3, 1, 1])
+    with col_prev:
+        if st.button("◀ Anterior", disabled=(pagina_actual <= 1), key=f"prev_page_{level}_{rec_code}"):
+            st.session_state[pagina_key] = max(1, pagina_actual - 1)
+            st.rerun()
 
-        # Botón anterior
-        with cols[0]:
-            if st.button("◀", disabled=(pagina_actual <= 1), key=f"prev_page_{level}_{rec_code}"):
-                st.session_state[pagina_key] = max(1, pagina_actual - 1)
-                st.rerun()
+    with col_info:
+        st.markdown(f"<center>Página {pagina_actual} de {total_paginas}</center>", unsafe_allow_html=True)
 
-        # Números de página como botones
-        with cols[2]:
-            # Mostrar páginas como botones (máximo 5 páginas visibles)
-            paginas_a_mostrar = []
-
-            if total_paginas <= 5:
-                paginas_a_mostrar = list(range(1, total_paginas + 1))
-            else:
-                if pagina_actual <= 3:
-                    paginas_a_mostrar = [1, 2, 3, 4, 5]
-                elif pagina_actual >= total_paginas - 2:
-                    paginas_a_mostrar = list(range(total_paginas - 4, total_paginas + 1))
-                else:
-                    paginas_a_mostrar = list(range(pagina_actual - 2, pagina_actual + 3))
-
-            # Crear mini-columnas para cada número de página
-            mini_cols = st.columns(len(paginas_a_mostrar))
-
-            for i, pagina in enumerate(paginas_a_mostrar):
-                with mini_cols[i]:
-                    if pagina == pagina_actual:
-                        st.markdown(
-                            f"<div style='background: #007bff; color: white; text-align: center; padding: 4px; border-radius: 4px; margin: 2px;'>{pagina}</div>",
-                            unsafe_allow_html=True)
-                    else:
-                        if st.button(str(pagina), key=f"page_{level}_{rec_code}_{pagina}"):
-                            st.session_state[pagina_key] = pagina
-                            st.rerun()
-
-        # Botón siguiente
-        with cols[4]:
-            if st.button("▶", disabled=(pagina_actual >= total_paginas), key=f"next_page_{level}_{rec_code}"):
-                st.session_state[pagina_key] = min(total_paginas, pagina_actual + 1)
-                st.rerun()
+    with col_next:
+        if st.button("Siguiente ▶", disabled=(pagina_actual >= total_paginas), key=f"next_page_{level}_{rec_code}"):
+            st.session_state[pagina_key] = min(total_paginas, pagina_actual + 1)
+            st.rerun()
 
 def render_ficha_municipal():
     """Vista municipal optimizada"""
@@ -240,7 +208,7 @@ def render_ficha_municipal():
         "Umbral de Similitud:",
         min_value=0.0,
         max_value=1.0,
-        value=0.6,
+        value=0.65,
         step=0.05,
         help="Filtro para mostrar solo oraciones con similitud igual o superior al valor seleccionado"
     )
@@ -542,8 +510,8 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
                 x='Frecuencia',
                 y='Código',
                 orientation='h',
-                title='Número de Oraciones por Recomendación',
-                labels={'Frecuencia': 'Número de Oraciones', 'Código': 'Código de Recomendación'},
+                title='Número de menciones por recomendación',
+                labels={'Frecuencia': 'Número de menciones', 'Código': 'Código de Recomendación'},
                 color='Frecuencia',
                 color_continuous_scale='blues',
                 hover_data={'Texto': True, 'Frecuencia': True}
@@ -584,8 +552,8 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
                     x='Recomendaciones_Implementadas',
                     y='Tema',
                     orientation='h',
-                    title='Recomendaciones Implementadas por Tema',
-                    labels={'Recomendaciones_Implementadas': 'Número de Recomendaciones', 'Tema': ''},
+                    title='Recomendaciones mencionadas al menos una vez por tema',
+                    labels={'Recomendaciones_Implementadas': 'Número de recomendaciones mencionadas', 'Tema': ''},
                     color='Recomendaciones_Implementadas',
                     color_continuous_scale='viridis'
                 )
@@ -684,12 +652,11 @@ def _render_analisis_detallado_recomendaciones(high_quality_sentences):
                 for idx, row in paragraph_analysis_paginado.iterrows():
                     with st.expander(
                             f"Párrafo {row['ID_Párrafo']} - Similitud Promedio: {row['Similitud_Prom']:.3f}",
-                            expanded=idx == paragraph_analysis_paginado.index[0]):  # Solo el primero expandido
+                            expanded=idx == paragraph_analysis_paginado.index[0]):
                         col1, col2 = st.columns([3, 1])
 
                         with col1:
                             st.write("**Contenido del Párrafo:**")
-                            # Truncar texto muy largo
                             para_text = row['Texto_Párrafo'][:800] + "..." if len(
                                 row['Texto_Párrafo']) > 800 else row['Texto_Párrafo']
                             st.write(para_text)
@@ -700,8 +667,26 @@ def _render_analisis_detallado_recomendaciones(high_quality_sentences):
                             st.write(f"**ID Párrafo:** {row['ID_Párrafo']}")
                             st.write(f"**Similitud Párrafo:** {row['Similitud_Párrafo']:.3f}")
 
-                # Mostrar controles de paginación para párrafos
-                mostrar_paginacion_coincidencias(selected_rec_code, "parrafos")
+                # CONTROLES DE PAGINACIÓN - Siempre mostrar si hay más de 1 página
+                if total_paginas > 1:
+                    st.markdown("---")
+                    col_prev, col_info, col_next = st.columns([1, 2, 1])
+
+                    with col_prev:
+                        if st.button("◀ Anterior", disabled=(pagina_actual <= 1),
+                                     key=f"prev_page_parrafos_{selected_rec_code}"):
+                            st.session_state[pagina_key] = max(1, pagina_actual - 1)
+                            st.rerun()
+
+                    with col_info:
+                        st.markdown(f"<center>Página {pagina_actual} de {total_paginas}</center>",
+                                    unsafe_allow_html=True)
+
+                    with col_next:
+                        if st.button("Siguiente ▶", disabled=(pagina_actual >= total_paginas),
+                                     key=f"next_page_parrafos_{selected_rec_code}"):
+                            st.session_state[pagina_key] = min(total_paginas, pagina_actual + 1)
+                            st.rerun()
 
             # PESTAÑA 2: NIVEL DE ORACIÓN
             else:  # "💬 Oraciones"
@@ -734,12 +719,11 @@ def _render_analisis_detallado_recomendaciones(high_quality_sentences):
                 st.write(
                     f"📋 Mostrando {len(sentence_analysis_paginado)} de {total_coincidencias} oraciones (Página {pagina_actual} de {total_paginas})")
 
-                # Mostrar oraciones paginadas
                 for idx, (_, row) in enumerate(sentence_analysis_paginado.iterrows()):
                     sentence_id = row.get('sentence_id_paragraph', f'S{idx + 1}')
 
                     with st.expander(f"Oración {sentence_id} - Similitud: {row['sentence_similarity']:.3f}",
-                                     expanded=idx == 0):  # Solo la primera expandida
+                                     expanded=idx == 0):
                         col1, col2 = st.columns([3, 1])
 
                         with col1:
@@ -755,14 +739,33 @@ def _render_analisis_detallado_recomendaciones(high_quality_sentences):
                             st.write(f"**Similitud Oración:** {row['sentence_similarity']:.3f}")
                             st.write(f"**Clasificación ML:** {row['predicted_class']}")
 
-                # Mostrar controles de paginación para oraciones
-                mostrar_paginacion_coincidencias(selected_rec_code, "oraciones")
+                    # CONTROLES DE PAGINACIÓN - Siempre mostrar si hay más de 1 página
+                if total_paginas > 1:
+                    st.markdown("---")
+                    col_prev, col_info, col_next = st.columns([1, 2, 1])
+
+                    with col_prev:
+                        if st.button("◀ Anterior", disabled=(pagina_actual <= 1),
+                                     key=f"prev_page_oraciones_{selected_rec_code}"):
+                            st.session_state[pagina_key] = max(1, pagina_actual - 1)
+                            st.rerun()
+
+                    with col_info:
+                        st.markdown(f"<center>Página {pagina_actual} de {total_paginas}</center>",
+                                    unsafe_allow_html=True)
+
+                    with col_next:
+                        if st.button("Siguiente ▶", disabled=(pagina_actual >= total_paginas),
+                                     key=f"next_page_oraciones_{selected_rec_code}"):
+                            st.session_state[pagina_key] = min(total_paginas, pagina_actual + 1)
+                            st.rerun()
 
     else:
         st.info("No hay recomendaciones disponibles con el filtro actual.")
 
+
 def _render_diccionario_recomendaciones(datos_municipio, municipio, include_policy_only):
-    """Diccionario de recomendaciones"""
+    """Diccionario de recomendaciones con vista de tabla optimizada"""
 
     st.markdown("### 📖 Diccionario de Recomendaciones")
 
@@ -831,80 +834,95 @@ def _render_diccionario_recomendaciones(datos_municipio, municipio, include_poli
     elif priority_filter == 'Solo no priorizadas':
         filtered_dict = filtered_dict[filtered_dict['Priorizado_GN'] == 0]
 
-    # PAGINACIÓN
-    recomendaciones_por_pagina = 5
-    total_recomendaciones = len(filtered_dict)
-    total_paginas = max(1, (total_recomendaciones - 1) // recomendaciones_por_pagina + 1)
+    # Preparar columnas para visualización
+    filtered_dict['Priorizado'] = filtered_dict['Priorizado_GN'].apply(
+        lambda x: '🔴 Sí' if x == 1 else '⚪ No' if x == 0 else 'N/A'
+    )
 
-    # Clave única para esta sección
-    pagina_key = f'pagina_dict_recs_{municipio.replace(" ", "_")}'
-    if pagina_key not in st.session_state:
-        st.session_state[pagina_key] = 1
+    # Truncar texto largo para la tabla
+    filtered_dict['Texto_Corto'] = filtered_dict['Texto'].apply(
+        lambda x: x[:100] + '...' if len(x) > 100 else x
+    )
 
-    # Resetear página cuando cambian los filtros
-    if search_term or selected_topic != 'Todos' or priority_filter != 'Todos':
-        # Solo resetear si hay filtros activos y cambió el contenido
-        if pagina_key in st.session_state and st.session_state[pagina_key] > total_paginas:
-            st.session_state[pagina_key] = 1
+    # Redondear similitudes
+    filtered_dict['Similitud_Promedio'] = filtered_dict['Similitud_Promedio'].round(3)
+    filtered_dict['Similitud_Máxima'] = filtered_dict['Similitud_Máxima'].round(3)
 
-    # Validar página actual
-    if st.session_state[pagina_key] > total_paginas:
-        st.session_state[pagina_key] = 1
+    # Mostrar contador de resultados
+    st.markdown(f"**Total de recomendaciones encontradas: {len(filtered_dict)}**")
 
-    pagina_actual = st.session_state[pagina_key]
+    # Mostrar tabla optimizada
+    if not filtered_dict.empty:
+        # Columnas a mostrar en la tabla
+        display_columns = ['Código', 'Texto_Corto', 'Tema', 'Priorizado',
+                           'Total_Menciones', 'Similitud_Promedio', 'Similitud_Máxima']
 
-    # Aplicar paginación
-    inicio = (pagina_actual - 1) * recomendaciones_por_pagina
-    fin = inicio + recomendaciones_por_pagina
-    filtered_dict_paginado = filtered_dict.iloc[inicio:fin]
+        # Renombrar columnas para mejor visualización
+        display_df = filtered_dict[display_columns].copy()
+        display_df.columns = ['Código', 'Descripción', 'Tema', 'Prioritaria',
+                              'Menciones', 'Sim. Prom.', 'Sim. Máx.']
 
-    # Mostrar contador de resultados con información de paginación
-    st.markdown(f"**Mostrando {len(filtered_dict_paginado)} de {total_recomendaciones} recomendaciones (Página {pagina_actual} de {total_paginas})**")
+        # Mostrar tabla con dataframe interactivo
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            height=400,
+            hide_index=True,
+            column_config={
+                "Código": st.column_config.TextColumn("Código", width="small"),
+                "Descripción": st.column_config.TextColumn("Descripción", width="large"),
+                "Tema": st.column_config.TextColumn("Tema", width="medium"),
+                "Prioritaria": st.column_config.TextColumn("Prioritaria", width="small"),
+                "Menciones": st.column_config.NumberColumn("Menciones", width="small"),
+                "Sim. Prom.": st.column_config.NumberColumn("Sim. Prom.", format="%.3f", width="small"),
+                "Sim. Máx.": st.column_config.NumberColumn("Sim. Máx.", format="%.3f", width="small"),
+            }
+        )
 
-    # Mostrar recomendaciones
-    if not filtered_dict_paginado.empty:
-        for idx, row in filtered_dict_paginado.iterrows():
-            with st.expander(f"**{row['Código']}** - {row['Texto'][:80]}...", expanded=False):
+        # Opción para expandir detalles de una recomendación
+        st.markdown("---")
+        st.markdown("**💡 Ver detalles completos de una recomendación:**")
+
+        selected_code = st.selectbox(
+            "Seleccione un código:",
+            options=[''] + filtered_dict['Código'].tolist(),
+            format_func=lambda x: f"{x}" if x else "-- Seleccione --",
+            key=f"detail_dict_{municipio}"
+        )
+
+        if selected_code:
+            detail_row = filtered_dict[filtered_dict['Código'] == selected_code].iloc[0]
+
+            with st.container():
+                st.markdown(f"### {detail_row['Código']}")
+
                 col1, col2 = st.columns([3, 1])
 
                 with col1:
                     st.markdown("**Descripción completa:**")
-                    st.write(row['Texto'])
+                    st.write(detail_row['Texto'])
 
-                    if pd.notna(row['Tema']):
-                        st.markdown(f"**Tema:** {row['Tema']}")
+                    if pd.notna(detail_row['Tema']):
+                        st.markdown(f"**Tema:** {detail_row['Tema']}")
 
                 with col2:
                     st.markdown("**Información:**")
-                    st.write(f"**Código:** {row['Código']}")
-
-                    if pd.notna(row['Priorizado_GN']):
-                        priority_text = "Sí" if row['Priorizado_GN'] == 1 else "No"
-                        priority_color = "🔴" if row['Priorizado_GN'] == 1 else "⚪"
-                        st.write(f"**Priorizado por GN:** {priority_color} {priority_text}")
+                    st.write(f"**Código:** {detail_row['Código']}")
+                    st.write(f"**Priorizado por GN:** {detail_row['Priorizado']}")
 
                     st.markdown("**Estadísticas:**")
-                    st.write(f"**Total menciones:** {row['Total_Menciones']}")
-                    st.write(f"**Similitud promedio:** {row['Similitud_Promedio']:.3f}")
-                    st.write(f"**Similitud máxima:** {row['Similitud_Máxima']:.3f}")
+                    st.write(f"**Total menciones:** {detail_row['Total_Menciones']}")
+                    st.write(f"**Similitud promedio:** {detail_row['Similitud_Promedio']:.3f}")
+                    st.write(f"**Similitud máxima:** {detail_row['Similitud_Máxima']:.3f}")
 
-        # Controles de paginación
-        if total_paginas > 1:
-            st.markdown("---")
-            col_prev, col_info, col_next = st.columns([1, 2, 1])
-
-            with col_prev:
-                if st.button("◀ Anterior", disabled=(pagina_actual <= 1), key=f"prev_dict_{municipio}"):
-                    st.session_state[pagina_key] = max(1, pagina_actual - 1)
-                    st.rerun()
-
-            with col_info:
-                st.markdown(f"<center>Página {pagina_actual} de {total_paginas}</center>", unsafe_allow_html=True)
-
-            with col_next:
-                if st.button("Siguiente ▶", disabled=(pagina_actual >= total_paginas), key=f"next_dict_{municipio}"):
-                    st.session_state[pagina_key] = min(total_paginas, pagina_actual + 1)
-                    st.rerun()
-
+        # Opción de descarga
+        csv_data = to_csv_utf8_bom(filtered_dict[['Código', 'Texto', 'Tema', 'Priorizado_GN',
+                                                  'Total_Menciones', 'Similitud_Promedio', 'Similitud_Máxima']])
+        st.download_button(
+            label="📥 Descargar diccionario completo (CSV)",
+            data=csv_data,
+            file_name=f"diccionario_recomendaciones_{municipio.replace(' ', '_')}.csv",
+            mime="text/csv; charset=utf-8",
+        )
     else:
         st.info("No se encontraron recomendaciones que coincidan con los criterios de búsqueda.")
