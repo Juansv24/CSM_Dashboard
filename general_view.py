@@ -8,6 +8,7 @@ from google_drive_client import (
     obtener_estadisticas_departamentales
 )
 
+
 @st.cache_data
 def cargar_geojson():
     """Cargar datos GeoJSON de Colombia"""
@@ -17,6 +18,26 @@ def cargar_geojson():
         return response.json()
     except Exception as e:
         st.warning(f"Error cargando GeoJSON: {str(e)}")
+        return None
+
+@st.cache_data
+def cargar_geojson_municipios():
+    """Cargar GeoJSON de municipios desde archivo local"""
+    try:
+        import json
+
+        # Ruta al archivo (ajusta el nombre según tu archivo)
+        geojson_path = "Mapa Municipios.geojson"
+
+        with open(geojson_path, 'r', encoding='utf-8') as f:
+            geojson_data = json.load(f)
+
+        return geojson_data
+    except FileNotFoundError:
+        st.error("❌ No se encontró el archivo GeoJSON de municipios")
+        return None
+    except Exception as e:
+        st.error(f"Error cargando GeoJSON municipal: {str(e)}")
         return None
 
 def obtener_metadatos_filtrados(umbral_similitud, filtro_pdet, filtro_iica, filtro_mdm):
@@ -166,7 +187,7 @@ def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_sim
 
     # Mapa coroplético
     if geojson_data and dept_data is not None:
-        _render_choropleth_map(dept_data, geojson_data)
+        _render_choropleth_map(dept_data, geojson_data, min_similarity)
     else:
         st.warning("No se pudo cargar el mapa de Colombia")
 
@@ -201,8 +222,13 @@ def render_general_view(metadatos, geojson_data=None, dept_data=None, umbral_sim
         filtro_mdm
     )
 
-def _render_choropleth_map(dept_data, geojson_data):
+def _render_choropleth_map(dept_data, geojson_data, min_similarity):
     """Renderizar mapa coroplético - Con municipios MIN y MAX"""
+
+    # Si ya hay un departamento seleccionado, mostrar el mapa municipal
+    if st.session_state.get('selected_department_code'):
+        _render_municipal_map(st.session_state['selected_department_code'], min_similarity)
+        return
 
     min_valor = dept_data['Promedio_Recomendaciones'].min()
     max_valor = dept_data['Promedio_Recomendaciones'].max()
@@ -237,7 +263,7 @@ def _render_choropleth_map(dept_data, geojson_data):
                      'Max_Recomendaciones', 'Municipio_Max']
     )
 
-    # Personalizar el hover template con nombres de municipios
+    # Personalizar el hover template
     fig_map.update_traces(
         hovertemplate='<b>%{hovertext}</b><br><br>' +
                       'Número de Municipios: %{customdata[0]}<br>' +
@@ -256,6 +282,149 @@ def _render_choropleth_map(dept_data, geojson_data):
 
     fig_map.update_layout(height=600, margin={"r": 0, "t": 30, "l": 0, "b": 0})
     st.plotly_chart(fig_map, use_container_width=True)
+
+    # Lista de departamentos con botones
+    with st.expander("🗺️ Ver detalle municipal por departamento", expanded=False):
+        st.markdown("Seleccione un departamento para explorar sus municipios:")
+
+        # Ordenar por promedio (descendente)
+        dept_data_sorted = dept_data.sort_values('Promedio_Recomendaciones', ascending=False)
+
+        # Crear grid de botones (4 columnas)
+        cols_per_row = 4
+        rows_needed = (len(dept_data_sorted) + cols_per_row - 1) // cols_per_row
+
+        for row in range(rows_needed):
+            cols = st.columns(cols_per_row)
+
+            for col_idx in range(cols_per_row):
+                dept_idx = row * cols_per_row + col_idx
+
+                if dept_idx < len(dept_data_sorted):
+                    dept_row = dept_data_sorted.iloc[dept_idx]
+                    dept_name = dept_row['Departamento']
+                    dept_code = dept_row['dpto_cdpmp']
+                    promedio = dept_row['Promedio_Recomendaciones']
+
+                    with cols[col_idx]:
+                        if st.button(
+                                f"{dept_name}",
+                                key=f"btn_dept_{dept_code}",
+                                use_container_width=True
+                        ):
+                            st.session_state['selected_department_code'] = dept_code
+                            st.rerun()
+
+def _render_municipal_map(dpto_code, min_similarity):
+    """Renderizar mapa de municipios de un departamento específico"""
+
+    st.markdown("---")
+
+    # Botón para cerrar PRIMERO - antes de cualquier processing
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("◀ Volver", use_container_width=True):
+            st.session_state['selected_department_code'] = None  # ← Limpiar en lugar de delete
+            st.rerun()
+
+    with col2:
+        st.subheader(f"🗺️ Detalle Municipal")
+
+    conn = st.session_state.get('duckdb_conn')
+    if not conn:
+        return
+
+    # Cargar GeoJSON municipal
+    geojson_municipal = cargar_geojson_municipios()
+    if not geojson_municipal:
+        st.warning("No se pudo cargar el mapa de municipios")
+        return
+
+    # Normalizar código del departamento
+    dpto_code_normalized = str(dpto_code).zfill(2)
+
+    # Obtener datos municipales del departamento
+    query = f"""
+        SELECT 
+            mpio_cdpmp,
+            mpio as Municipio,
+            dpto as Departamento,
+            COUNT(DISTINCT recommendation_code) as Num_Recomendaciones,
+            AVG(sentence_similarity) as Similitud_Promedio
+        FROM datos_principales
+        WHERE dpto_cdpmp = '{dpto_code_normalized}'
+        AND sentence_similarity >= {min_similarity}
+        AND tipo_territorio = 'Municipio'
+        GROUP BY mpio_cdpmp, mpio, dpto
+        ORDER BY Num_Recomendaciones DESC
+    """
+
+    municipal_data = conn.execute(query).df()
+
+    if municipal_data.empty:
+        st.warning(f"⚠️ No hay datos municipales disponibles")
+        return
+
+    # Filtrar GeoJSON
+    geojson_filtered = {
+        "type": "FeatureCollection",
+        "features": [
+            feature for feature in geojson_municipal['features']
+            if str(feature['properties'].get('DPTO_CCDGO', '')).zfill(2) == dpto_code_normalized
+        ]
+    }
+
+    if len(geojson_filtered['features']) == 0:
+        st.warning(f"⚠️ No se encontraron geometrías municipales")
+        st.dataframe(
+            municipal_data[['Municipio', 'Num_Recomendaciones', 'Similitud_Promedio']],
+            use_container_width=True,
+            hide_index=True
+        )
+        return
+
+    # Normalizar códigos municipales
+    municipal_data['mpio_cdpmp_normalized'] = municipal_data['mpio_cdpmp'].astype(str).str.zfill(5)
+
+    # Crear mapa
+    fig_municipal = px.choropleth(
+        municipal_data,
+        geojson=geojson_filtered,
+        locations='mpio_cdpmp_normalized',
+        color='Num_Recomendaciones',
+        color_continuous_scale='viridis',
+        title=f'Recomendaciones por municipio - {municipal_data["Departamento"].iloc[0]}',
+        hover_name='Municipio',
+        hover_data={
+            'mpio_cdpmp_normalized': False,
+            'Num_Recomendaciones': True,
+            'Similitud_Promedio': ':.3f'
+        },
+        featureidkey="properties.MPIO_CCNCT",
+        labels={  
+            'Num_Recomendaciones': 'Número de recomendaciones mencionadas',
+            'Similitud_Promedio': 'Similitud promedio'
+        }
+    )
+
+    fig_municipal.update_geos(
+        fitbounds="locations",
+        visible=False
+    )
+
+    fig_municipal.update_layout(
+        height=600,
+        margin={"r": 0, "t": 50, "l": 0, "b": 0}
+    )
+
+    st.plotly_chart(fig_municipal, use_container_width=True, key="mapa_municipal")  # ← Agregar key
+
+    # Tabla complementaria
+    st.dataframe(
+        municipal_data[['Municipio', 'Num_Recomendaciones', 'Similitud_Promedio']],
+        use_container_width=True,
+        hide_index=True
+    )
 
 def _render_recommendations_stats(umbral_similitud, metadatos, filtro_pdet, filtro_iica, filtro_mdm):
     """Estadísticas de recomendaciones"""
