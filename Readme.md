@@ -871,17 +871,12 @@ with st.expander("Ver mapa municipal", expanded=False):
 **Desarrollado por:** Juan Sebastian Vallejo
 **Versión:** 1.0.0  
 **Última actualización:** Octubre 2025  
-**Licencia:** MIT
 
 ---
 
 <div align="center">
 
 **⭐ Si este proyecto te fue útil, considera darle una estrella en GitHub ⭐**
-
-[🐛 Reportar Bug](https://github.com/tu-usuario/dashboard-cev-colombia/issues) | 
-[✨ Solicitar Feature](https://github.com/tu-usuario/dashboard-cev-colombia/issues) | 
-[📖 Documentación](https://github.com/tu-usuario/dashboard-cev-colombia/wiki)
 
 ---
 
