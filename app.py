@@ -76,7 +76,7 @@ def main():
                    ### ⚙️ Estructura del dashboard
 
                    **Vista General (🌎):**
-                   - Mapa interactivo mostrando cobertura por departamento
+                   - Mapa interactivo mostrando mención promedio por municipio a nivel departamental
                    - Gráfico de barras con las recomendaciones más mencionadas
                    - Distribución de municipios por número de recomendaciones que son mencionadas y por el número de veces que son mencionadas 
                    - Análisis por recomendación: Qué municipios mencionan la recomendación seleccionada ordenados por número de menciones
