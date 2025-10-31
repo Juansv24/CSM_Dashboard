@@ -4,13 +4,62 @@ import gdown
 import duckdb
 import os
 import tempfile
+import time
 from typing import Optional, Dict, Any
 
 
+def _descargar_parquet_con_reintentos(file_id: str, max_reintentos: int = 3) -> Optional[str]:
+    """
+    Descarga archivo Parquet desde Google Drive con reintentos exponenciales.
+
+    Reintentos: 5s, 10s, 20s con timeout de 120s cada intento.
+    """
+    temp_dir = tempfile.gettempdir()
+    parquet_path = os.path.join(temp_dir, f"dashboard_{file_id[:8]}.parquet")
+
+    # Si el archivo ya existe, validar integridad
+    if os.path.exists(parquet_path):
+        try:
+            with open(parquet_path, 'rb') as f:
+                header = f.read(4)
+                if header == b'PAR1':  # Parquet magic number
+                    return parquet_path
+        except:
+            os.remove(parquet_path)  # Archivo corrupto, eliminar
+
+    url = f"https://drive.google.com/uc?id={file_id}"
+
+    for intento in range(max_reintentos):
+        try:
+            with st.spinner(f'📥 Descargando datos (intento {intento + 1}/{max_reintentos})...'):
+                gdown.download(url, parquet_path, quiet=False, timeout=120)
+            st.success("✅ Datos descargados exitosamente")
+            return parquet_path
+
+        except Exception as e:
+            if intento < max_reintentos - 1:
+                espera = 5 * (2 ** intento)  # Exponential backoff: 5s, 10s, 20s
+                st.warning(f"⚠️ Intento {intento + 1} falló. Reintentando en {espera}s...")
+                time.sleep(espera)
+            else:
+                st.error(f"❌ Error al descargar datos después de {max_reintentos} intentos: {str(e)}")
+                return None
+
+
 @st.cache_resource
+def _obtener_ruta_parquet_cacheada(file_id: str) -> Optional[str]:
+    """
+    Cachea SOLO la descarga del archivo Parquet (es cara).
+    NO cachea la conexión DuckDB.
+    """
+    return _descargar_parquet_con_reintentos(file_id, max_reintentos=3)
+
+
 def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
     """
-    Descarga archivo Parquet desde Google Drive y crea conexión DuckDB en memoria
+    ⚠️ IMPORTANTE: NO tiene @st.cache_resource
+    Cada usuario necesita su propia conexión aislada.
+    Las conexiones compartidas causan race conditions con usuarios concurrentes.
 
     Returns:
         Conexión DuckDB o None si hay error
@@ -23,27 +72,20 @@ def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
             st.error("⚠️ Configura PARQUET_FILE_ID en Streamlit secrets")
             return None
 
-        # Configurar archivo temporal
-        temp_dir = tempfile.gettempdir()
-        parquet_path = os.path.join(temp_dir, f"dashboard_{file_id[:8]}.parquet")
+        # Obtener ruta del archivo (descargado y cacheado)
+        parquet_path = _obtener_ruta_parquet_cacheada(file_id)
+        if parquet_path is None:
+            return None
 
-        # Descargar si no existe en caché
-        if not os.path.exists(parquet_path):
-            url = f"https://drive.google.com/uc?id={file_id}"
-            with st.spinner('📥 Descargando datos...'):
-                gdown.download(url, parquet_path, quiet=False)
-            st.success("✅ Datos descargados")
-        else:
-            st.info("⚡ Usando datos en caché")
-
-        # Crear conexión DuckDB
+        # Crear conexión DuckDB - NUEVA para cada usuario, NO cacheada
         conn = duckdb.connect(':memory:')
-        conn.execute("SET memory_limit='1GB'")
-        conn.execute("SET threads=2")
+        conn.execute("SET memory_limit='256MB'")  # Reducido: 1GB -> 256MB (fit Streamlit Cloud 512MB)
+        conn.execute("SET threads=1")  # Reducido: 2 -> 1 (avoid contention)
+        conn.execute("PRAGMA temp_directory='/tmp'")  # Disk overflow para graceful degradation
 
         # Crear vista desde Parquet
         conn.execute(f"""
-            CREATE VIEW datos_principales AS 
+            CREATE VIEW datos_principales AS
             SELECT * FROM read_parquet('{parquet_path}')
         """)
 
