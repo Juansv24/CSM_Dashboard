@@ -100,10 +100,12 @@ def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
         return None
 
 
-@st.cache_data
 def obtener_metadatos_basicos() -> Dict[str, Any]:
     """
-    Obtiene métricas básicas del dataset
+    Obtiene métricas básicas del dataset.
+
+    ⚠️ NO CACHEADA: Cada usuario necesita datos frescos.
+    El @st.cache_data global causaba metadata stale para usuarios concurrentes.
 
     Returns:
         Diccionario con estadísticas generales

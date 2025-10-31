@@ -1,4 +1,7 @@
 import streamlit as st
+import time
+import uuid
+from datetime import datetime, timedelta
 from vista_general import render_vista_general
 from vista_departamental import render_ficha_departamental
 from vista_municipal import render_ficha_municipal
@@ -14,8 +17,82 @@ st.set_page_config(
 )
 
 
+def _validar_sesion_activa(timeout_minutos: int = 30) -> bool:
+    """
+    Valida si la sesión sigue activa según tiempo de inactividad.
+
+    Características:
+    - Detecta inactividad del usuario (último tiempo registrado)
+    - Limpia recursos (DuckDB connection) después de timeout
+    - Retorna True si sesión está activa, False si expiró
+
+    Args:
+        timeout_minutos: Minutos de inactividad antes de expirar sesión (default: 30)
+
+    Returns:
+        bool: True si sesión activa, False si expiró
+    """
+    ahora = datetime.now()
+
+    # Inicializar timestamp de actividad si no existe
+    if 'ultima_actividad' not in st.session_state:
+        st.session_state.ultima_actividad = ahora
+        return True
+
+    # Calcular tiempo desde última actividad
+    tiempo_inactivo = ahora - st.session_state.ultima_actividad
+
+    # Si pasó el timeout, limpiar recursos y retornar False
+    if tiempo_inactivo > timedelta(minutes=timeout_minutos):
+        # Cerrar conexión DuckDB si existe
+        if 'duckdb_conn' in st.session_state and st.session_state.duckdb_conn:
+            try:
+                st.session_state.duckdb_conn.close()
+            except:
+                pass
+            st.session_state.duckdb_conn = None
+
+        # Limpiar timestamp de actividad para nueva sesión
+        del st.session_state.ultima_actividad
+        return False
+
+    # Actualizar timestamp de actividad (el usuario sigue activo)
+    st.session_state.ultima_actividad = ahora
+    return True
+
+
+def _inicializar_sesion_usuario() -> str:
+    """
+    Inicializa sesión única para cada usuario.
+
+    Características:
+    - Genera UUID único por sesión (no compartido entre usuarios)
+    - Aísla datos de usuario para evitar contaminación cruzada
+    - Registra timestamp de inicio de sesión
+    - Permite tracking independiente de cada usuario
+
+    Returns:
+        str: ID único de sesión (UUID4)
+    """
+    # IMPROVEMENT #6: Generar ID único de sesión si no existe
+    if 'session_id' not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+        st.session_state.session_start = datetime.now()
+
+    return st.session_state.session_id
+
+
 def main():
     st.markdown("# 📊 Dashboard de Similitudes Jerárquicas")
+
+    # IMPROVEMENT #5: Validar sesión activa y limpiar recursos si expiró
+    if not _validar_sesion_activa(timeout_minutos=30):
+        st.warning("⏱️ Sesión expirada por inactividad (30 minutos). Recargando...")
+        time.sleep(1)
+        st.rerun()
+
+    # IMPROVEMENT #6: Inicializar sesión única de usuario
+    session_id = _inicializar_sesion_usuario()
 
     # Inicializar conexión a DuckDB
     if 'duckdb_conn' not in st.session_state:
