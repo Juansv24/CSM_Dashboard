@@ -32,7 +32,7 @@ def _descargar_parquet_con_reintentos(file_id: str, max_reintentos: int = 3) -> 
     for intento in range(max_reintentos):
         try:
             with st.spinner(f'📥 Descargando datos (intento {intento + 1}/{max_reintentos})...'):
-                gdown.download(url, parquet_path, quiet=False, timeout=120)
+                gdown.download(url, parquet_path, quiet=False)
             st.success("✅ Datos descargados exitosamente")
             return parquet_path
 
