@@ -1,6 +1,51 @@
-# Streamlit secrets
+# Environment and Secrets
+.env
+.env.local
 .streamlit/secrets.toml
 
-# Ignore all files and folders within the ".idea" folder
-/.idea/**
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Streamlit Cache
+.streamlit/cache/
+.streamlit/__pycache__/
+
+# Data Files
+*.parquet
+*.csv
+*.xlsx
+*.xls
+*.db
+temp_data/
+downloads/
+
+# Logs
+*.log
+logs/
+
+# OS
+Thumbs.db
+.DS_Store
 
