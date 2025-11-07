@@ -509,8 +509,14 @@ def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, 
         )
 
         if not top_recs.empty:
+            # Crear versión corta del texto para hover (máximo 100 caracteres)
+            top_recs_display = top_recs.copy()
+            top_recs_display['Texto_Corto'] = top_recs_display['Texto'].apply(
+                lambda x: x[:100] + '...' if len(x) > 100 else x
+            )
+
             fig_top = px.bar(
-                top_recs,
+                top_recs_display,
                 x='Frecuencia_Oraciones',
                 y='Codigo',
                 orientation='h',
@@ -521,8 +527,17 @@ def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, 
                 },
                 color='Frecuencia_Oraciones',
                 color_continuous_scale='viridis',
-                hover_data={'Texto': True, 'Frecuencia_Oraciones': True}
+                hover_data={'Texto_Corto': True, 'Frecuencia_Oraciones': True}
             )
+
+            # Personalizar el hover template para mejor legibilidad
+            fig_top.update_traces(
+                hovertemplate='<b>%{y}</b><br>' +
+                              'Frecuencia: %{x}<br>' +
+                              '%{customdata[0]}<br>' +
+                              '<extra></extra>'
+            )
+
             fig_top.update_layout(height=500, showlegend=False, coloraxis_showscale=False)
             fig_top.update_xaxes(title_text="Frecuencia mención")
             fig_top.update_yaxes(title_text="Código de recomendación")
@@ -606,6 +621,11 @@ def _render_detailed_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro
 
         # Info básica de la recomendación
         rec_info = top_recs[top_recs['Codigo'] == selected_rec].iloc[0]
+
+        # Mostrar texto completo de la recomendación
+        rec_text = rec_info['Texto']
+        st.markdown("**Texto de la Recomendación:**")
+        st.info(rec_text)
 
         col1, col2 = st.columns(2)
         with col1:
