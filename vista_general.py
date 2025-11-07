@@ -520,7 +520,8 @@ def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, 
                     'Codigo': 'Código'
                 },
                 color='Frecuencia_Oraciones',
-                color_continuous_scale='viridis'
+                color_continuous_scale='viridis',
+                hover_data={'Texto': True, 'Frecuencia_Oraciones': True}
             )
             fig_top.update_layout(height=500, showlegend=False, coloraxis_showscale=False)
             fig_top.update_xaxes(title_text="Frecuencia mención")
