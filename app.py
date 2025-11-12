@@ -94,14 +94,17 @@ def main():
     # IMPROVEMENT #6: Inicializar sesión única de usuario
     session_id = _inicializar_sesion_usuario()
 
-    # Inicializar conexión a DuckDB
+    # Inicializar conexión a DuckDB (cached globally, all users share indexed data)
     if 'duckdb_conn' not in st.session_state:
+        print("[App] Initializing DuckDB connection...")
         conn = conectar_duckdb_parquet()
         st.session_state.duckdb_conn = conn
 
         if conn is None:
-            st.error("❌ No se pudo conectar a la base de datos")
+            st.error("No se pudo cargar los datos. Verifica que el archivo parquet existe en la carpeta Data/")
             st.stop()
+        else:
+            print("[App] DuckDB connection initialized successfully")
 
     # Cargar metadatos básicos
     metadatos = obtener_metadatos_basicos()
