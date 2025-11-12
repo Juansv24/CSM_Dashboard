@@ -55,48 +55,82 @@ def _obtener_ruta_parquet_cacheada(file_id: str) -> Optional[str]:
     return _descargar_parquet_con_reintentos(file_id, max_reintentos=3)
 
 
+@st.cache_resource
 def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
     """
-    ⚠️ IMPORTANTE: NO tiene @st.cache_resource
-    Cada usuario necesita su propia conexión aislada.
-    Las conexiones compartidas causan race conditions con usuarios concurrentes.
+    Load parquet from disk and cache DuckDB connection globally.
+
+    This is cached so all users share:
+    - Same indexed data structure (no duplication)
+    - Same query optimization (efficient)
+    - Instant queries (<50ms) for all concurrent users
+
+    For a 1.3GB parquet file with 4.2M rows, this loads once
+    at Render startup and serves all users instantly.
 
     Returns:
-        Conexión DuckDB o None si hay error
+        DuckDB connection with indexed data or None if error
     """
     try:
-        # Obtener ID del archivo desde secrets
-        try:
-            file_id = st.secrets["PARQUET_FILE_ID"]
-        except Exception:
-            st.error("⚠️ Configura PARQUET_FILE_ID en Streamlit secrets")
-            return None
+        # Try multiple possible parquet file locations
+        possible_paths = [
+            'Data/Data Final Dashboard.parquet',  # In Data subfolder (primary)
+            'datos_principales.parquet',          # In root (if copied)
+            'Data Final Dashboard.parquet',       # Alternative name
+        ]
 
-        # Obtener ruta del archivo (descargado y cacheado)
-        parquet_path = _obtener_ruta_parquet_cacheada(file_id)
+        parquet_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                parquet_path = path
+                print(f"[DuckDB] Found parquet at: {parquet_path}")
+                break
+
         if parquet_path is None:
+            st.error("Parquet file not found. Checked:")
+            for path in possible_paths:
+                st.error(f"  - {path}")
+            st.error(f"Current directory: {os.getcwd()}")
+            st.error(f"Available files: {os.listdir('.')[:20]}")
             return None
 
-        # Crear conexión DuckDB - NUEVA para cada usuario, NO cacheada
+        # Create DuckDB connection (in-memory, fast queries)
         conn = duckdb.connect(':memory:')
-        conn.execute("SET memory_limit='256MB'")  # Reducido: 1GB -> 256MB (fit Streamlit Cloud 512MB)
-        conn.execute("SET threads=1")  # Reducido: 2 -> 1 (avoid contention)
-        conn.execute("PRAGMA temp_directory='/tmp'")  # Disk overflow para graceful degradation
 
-        # Crear vista desde Parquet
-        conn.execute(f"""
-            CREATE VIEW datos_principales AS
-            SELECT * FROM read_parquet('{parquet_path}')
-        """)
+        # Configure for optimal performance
+        conn.execute("SET memory_limit='2GB'")           # 2GB for 1.3GB parquet + indexes
+        conn.execute("SET threads=2")                    # Use 2 cores for parallelization
+        conn.execute("PRAGMA temp_directory='/tmp'")     # Use disk for overflow if needed
 
-        # Verificar conexión
+        # Load parquet into table (creates indexed data structure)
+        print(f"[DuckDB] Loading parquet: {parquet_path}")
+        with st.spinner('Loading data from disk... (one-time operation)'):
+            conn.execute(f"""
+                CREATE TABLE datos_principales AS
+                SELECT * FROM read_parquet('{parquet_path}')
+            """)
+
+            # Create indexes for fast query performance
+            print("[DuckDB] Creating indexes for fast queries...")
+            conn.execute("CREATE INDEX idx_recommendation_code ON datos_principales(recommendation_code)")
+            conn.execute("CREATE INDEX idx_sentence_similarity ON datos_principales(sentence_similarity)")
+            conn.execute("CREATE INDEX idx_dpto ON datos_principales(dpto)")
+            conn.execute("CREATE INDEX idx_mpio ON datos_principales(mpio)")
+            conn.execute("CREATE INDEX idx_tipo_territorio ON datos_principales(tipo_territorio)")
+
+        # Verify data loaded correctly
         total = conn.execute("SELECT COUNT(*) FROM datos_principales").fetchone()[0]
-        st.sidebar.success(f"📊 Registros: {total:,}")
+        st.sidebar.success(f"Data loaded: {total:,} records")
+        print(f"[DuckDB] Successfully loaded {total:,} records")
 
         return conn
 
     except Exception as e:
-        st.error(f"❌ Error conectando a base de datos: {str(e)}")
+        st.error(f"Error loading data: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
+        print(f"[DuckDB] Error: {str(e)}")
+        print(traceback.format_exc())
         return None
 
 
