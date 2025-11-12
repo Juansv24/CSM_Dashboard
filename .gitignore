@@ -13,12 +13,20 @@ __pycache__/
 dist/
 build/
 .eggs/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg
 
 # Virtual Environments
 venv/
 env/
 ENV/
 .venv
+.env.venv
+pip-log.txt
+pip-delete-this-directory.txt
 
 # IDE
 .vscode/
@@ -27,10 +35,14 @@ ENV/
 *.swo
 *~
 .DS_Store
+*.sublime-project
+*.sublime-workspace
 
 # Streamlit Cache
 .streamlit/cache/
 .streamlit/__pycache__/
+.streamlit/components/
+.streamlit/.streamlit_cache/
 
 # Data Files
 *.parquet
@@ -38,12 +50,16 @@ ENV/
 *.xlsx
 *.xls
 *.db
+*.sqlite
+*.sqlite3
 temp_data/
 downloads/
+cache/
 
 # Logs
 *.log
 logs/
+*.log.*
 
 # Git Worktrees
 .worktrees/
@@ -54,4 +70,41 @@ Docs/
 # OS
 Thumbs.db
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Node (if using node tools)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
+*.backup
+*~
+.#*
+
+# IDE Generated
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+
+# macOS
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+.classpath
+.project
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
 
