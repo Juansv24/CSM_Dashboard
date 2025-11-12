@@ -3,7 +3,7 @@ services:
     name: csm-dashboard
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install --only-binary :all: -r requirements.txt
     startCommand: streamlit run app.py --server.port=8080 --server.address=0.0.0.0
     envVars:
       - key: PYTHON_VERSION
