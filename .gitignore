@@ -45,6 +45,12 @@ downloads/
 *.log
 logs/
 
+# Git Worktrees
+.worktrees/
+
+# Documentation
+Docs/
+
 # OS
 Thumbs.db
 .DS_Store
