@@ -1,59 +1,8 @@
 import streamlit as st
 import pandas as pd
-import gdown
 import duckdb
 import os
-import tempfile
-import time
 from typing import Optional, Dict, Any
-
-
-def _descargar_parquet_con_reintentos(file_id: str, max_reintentos: int = 3) -> Optional[str]:
-    """
-    Descarga archivo Parquet desde Google Drive con reintentos exponenciales.
-
-    Reintentos: 5s, 10s, 20s con timeout de 120s cada intento.
-    """
-    temp_dir = tempfile.gettempdir()
-    parquet_path = os.path.join(temp_dir, f"dashboard_{file_id[:8]}.parquet")
-
-    # Si el archivo ya existe, validar integridad
-    if os.path.exists(parquet_path):
-        try:
-            with open(parquet_path, 'rb') as f:
-                header = f.read(4)
-                if header == b'PAR1':  # Parquet magic number
-                    return parquet_path
-        except:
-            os.remove(parquet_path)  # Archivo corrupto, eliminar
-
-    url = f"https://drive.google.com/uc?id={file_id}"
-
-    for intento in range(max_reintentos):
-        try:
-            with st.spinner(f'📥 Descargando datos (intento {intento + 1}/{max_reintentos})...'):
-                gdown.download(url, parquet_path, quiet=False)
-            st.success("✅ Datos descargados exitosamente")
-            return parquet_path
-
-        except Exception as e:
-            if intento < max_reintentos - 1:
-                espera = 5 * (2 ** intento)  # Exponential backoff: 5s, 10s, 20s
-                st.warning(f"⚠️ Intento {intento + 1} falló. Reintentando en {espera}s...")
-                time.sleep(espera)
-            else:
-                st.error(f"❌ Error al descargar datos después de {max_reintentos} intentos: {str(e)}")
-                return None
-
-
-@st.cache_resource
-def _obtener_ruta_parquet_cacheada(file_id: str) -> Optional[str]:
-    """
-    Cachea SOLO la descarga del archivo Parquet (es cara).
-    NO cachea la conexión DuckDB.
-    """
-    return _descargar_parquet_con_reintentos(file_id, max_reintentos=3)
-
 
 @st.cache_resource
 def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
