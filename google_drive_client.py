@@ -89,13 +89,14 @@ def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
         conn.execute("SET threads=2")  # Incrementado: 1 -> 2 (permite paralelización)
         conn.execute("PRAGMA temp_directory='/tmp'")  # Disk overflow para graceful degradation
 
-        # Crear vista desde Parquet
+        # ✅ MEJORA #3: Create table from Parquet (not a view)
+        # This allows us to create indexes on the actual table
         conn.execute(f"""
-            CREATE VIEW datos_principales AS
+            CREATE TABLE datos_principales AS
             SELECT * FROM read_parquet('{parquet_path}')
         """)
 
-        # ✅ MEJORA #3: Create indexes on frequently filtered columns
+        # Create indexes on frequently filtered columns
         # Estos índices aceleran queries hasta 10x
         conn.execute("CREATE INDEX idx_similarity ON datos_principales(sentence_similarity)")
         conn.execute("CREATE INDEX idx_recommendation ON datos_principales(recommendation_code)")
