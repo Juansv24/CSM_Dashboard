@@ -67,6 +67,9 @@ logs/
 # Documentation
 Docs/
 
+# Documentation
+Tests/
+
 # OS
 Thumbs.db
 .DS_Store
