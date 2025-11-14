@@ -7,6 +7,14 @@ import tempfile
 import time
 from typing import Optional, Dict, Any
 
+# Import logging configuration
+try:
+    from logger_config import logger, log_database_operation, log_query_performance, LoggingContext
+except ImportError:
+    # Fallback if logger_config is not yet available
+    import logging
+    logger = logging.getLogger("google_drive_client")
+
 
 def _descargar_parquet_con_reintentos(file_id: str, max_reintentos: int = 3) -> Optional[str]:
     """
@@ -68,49 +76,81 @@ def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
     Returns:
         Conexión DuckDB o None si hay error
     """
+    import time as time_module
+    start_time = time_module.time()
+
     try:
         # Obtener ID del archivo desde secrets
         try:
             file_id = st.secrets["PARQUET_FILE_ID"]
-        except Exception:
+        except Exception as e:
+            logger.error(f"PARQUET_FILE_ID not configured in secrets: {str(e)}")
             st.error("⚠️ Configura PARQUET_FILE_ID en Streamlit secrets")
             return None
 
         # Obtener ruta del archivo (descargado y cacheado)
         parquet_path = _obtener_ruta_parquet_cacheada(file_id)
         if parquet_path is None:
+            logger.error(f"Failed to download/cache parquet file: {file_id}")
             return None
+
+        logger.debug(f"Parquet file loaded: {parquet_path}")
 
         # Crear conexión DuckDB - CACHEADA para toda la sesión
         conn = duckdb.connect(':memory:')
+        logger.debug("DuckDB in-memory connection created")
 
         # ✅ MEJORA #2: Optimized memory and threading for Streamlit Cloud
         conn.execute("SET memory_limit='512MB'")  # Incrementado: 256MB -> 512MB (usa todos los recursos)
         conn.execute("SET threads=2")  # Incrementado: 1 -> 2 (permite paralelización)
         conn.execute("PRAGMA temp_directory='/tmp'")  # Disk overflow para graceful degradation
+        logger.debug("DuckDB configuration applied: memory_limit=512MB, threads=2")
 
         # ✅ MEJORA #3: Create table from Parquet (not a view)
         # This allows us to create indexes on the actual table
+        logger.debug("Loading parquet data into DuckDB table...")
         conn.execute(f"""
             CREATE TABLE datos_principales AS
             SELECT * FROM read_parquet('{parquet_path}')
         """)
+        logger.debug("Table datos_principales created successfully")
 
         # Create indexes on frequently filtered columns
         # Estos índices aceleran queries hasta 10x
+        logger.debug("Creating database indexes...")
         conn.execute("CREATE INDEX idx_similarity ON datos_principales(sentence_similarity)")
         conn.execute("CREATE INDEX idx_recommendation ON datos_principales(recommendation_code)")
         conn.execute("CREATE INDEX idx_municipality ON datos_principales(mpio_cdpmp)")
         conn.execute("CREATE INDEX idx_department ON datos_principales(dpto_cdpmp)")
         conn.execute("CREATE INDEX idx_territorio ON datos_principales(tipo_territorio)")
+        logger.debug("All indexes created successfully")
 
         # Verificar conexión
         total = conn.execute("SELECT COUNT(*) FROM datos_principales").fetchone()[0]
+        duration_ms = (time_module.time() - start_time) * 1000
+
+        log_database_operation(
+            operation='CONNECT_AND_LOAD',
+            table='datos_principales',
+            status='SUCCESS',
+            duration_ms=duration_ms,
+            row_count=total
+        )
+
         st.sidebar.success(f"📊 Registros: {total:,} | ✨ Optimizado")
+        logger.info(f"Database connection established successfully with {total:,} records in {duration_ms:.2f}ms")
 
         return conn
 
     except Exception as e:
+        duration_ms = (time_module.time() - start_time) * 1000
+        log_database_operation(
+            operation='CONNECT_AND_LOAD',
+            table='datos_principales',
+            status='FAILED',
+            duration_ms=duration_ms,
+            error=e
+        )
         st.error(f"❌ Error conectando a base de datos: {str(e)}")
         return None
 

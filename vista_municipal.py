@@ -411,7 +411,7 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
                     file_name="top_5_recomendaciones_frecuentes.csv",
                     mime="text/csv; charset=utf-8",
                     help="Descargar datos del gráfico",
-                    use_container_width=True
+                    width="stretch"
                 )
 
             fig_freq = px.bar(
@@ -426,7 +426,7 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
                 hover_data={'Texto': True, 'Frecuencia': True}
             )
             fig_freq.update_layout(height=400, showlegend=False, coloraxis_showscale=False)
-            st.plotly_chart(fig_freq, use_container_width=True)
+            st.plotly_chart(fig_freq, width="stretch")
 
         # Implementación por Tema
         if 'recommendation_topic' in high_quality_sentences.columns:
@@ -448,7 +448,7 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
                         file_name="implementacion_por_tema.csv",
                         mime="text/csv; charset=utf-8",
                         help="Descargar datos del gráfico",
-                        use_container_width=True
+                        width="stretch"
                     )
 
                 fig_heatmap = px.bar(
@@ -468,7 +468,7 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
                     margin=dict(l=150, r=50, t=80, b=50),
                     coloraxis_showscale=False
                 )
-                st.plotly_chart(fig_heatmap, use_container_width=True)
+                st.plotly_chart(fig_heatmap, width="stretch")
 
 
 def _render_analisis_detallado_recomendaciones(high_quality_sentences):
@@ -759,7 +759,7 @@ def _render_diccionario_recomendaciones(datos_municipio, municipio, include_poli
 
         st.dataframe(
             display_df,
-            use_container_width=True,
+            width="stretch",
             height=400,
             hide_index=True,
             column_config={

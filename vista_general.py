@@ -296,7 +296,7 @@ def _render_choropleth_map(dept_data, geojson_data, min_similarity):
     )
 
     fig_map.update_layout(height=600, margin={"r": 0, "t": 30, "l": 0, "b": 0})
-    st.plotly_chart(fig_map, use_container_width=True)
+    st.plotly_chart(fig_map, width="stretch")
 
     # Lista de departamentos con botones
     with st.expander("🗺️ Ver detalle municipal por departamento", expanded=False):
@@ -322,7 +322,7 @@ def _render_choropleth_map(dept_data, geojson_data, min_similarity):
                         if st.button(
                                 f"{dept_name}",
                                 key=f"btn_dept_{dept_code}",
-                                use_container_width=True
+                                width="stretch"
                         ):
                             st.session_state['selected_department_code'] = dept_code
                             st.rerun()
@@ -342,7 +342,7 @@ def _render_municipal_map(dpto_code, min_similarity):
     # Botón para volver
     col1, col2 = st.columns([1, 5])
     with col1:
-        if st.button("◀ Volver", use_container_width=True):
+        if st.button("◀ Volver", width="stretch"):
             st.session_state['selected_department_code'] = None
             st.rerun()
 
@@ -397,7 +397,7 @@ def _render_municipal_map(dpto_code, min_similarity):
         st.warning("⚠️ No se encontraron geometrías municipales")
         st.dataframe(
             municipal_data[['Municipio', 'Num_Recomendaciones', 'Similitud_Promedio']],
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
         return
@@ -436,12 +436,12 @@ def _render_municipal_map(dpto_code, min_similarity):
         margin={"r": 0, "t": 50, "l": 0, "b": 0}
     )
 
-    st.plotly_chart(fig_municipal, use_container_width=True, key="mapa_municipal")
+    st.plotly_chart(fig_municipal, width="stretch", key="mapa_municipal")
 
     # Tabla complementaria
     st.dataframe(
         municipal_data[['Municipio', 'Num_Recomendaciones', 'Similitud_Promedio']],
-        use_container_width=True,
+        width="stretch",
         hide_index=True
     )
 
@@ -541,7 +541,7 @@ def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, 
             fig_top.update_layout(height=500, showlegend=False, coloraxis_showscale=False)
             fig_top.update_xaxes(title_text="Frecuencia mención")
             fig_top.update_yaxes(title_text="Código de recomendación")
-            st.plotly_chart(fig_top, use_container_width=True)
+            st.plotly_chart(fig_top, width="stretch")
 
     with col2:
         # Ranking municipios
@@ -574,7 +574,7 @@ def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, 
             fig_scatter.update_xaxes(title_text="Recomendaciones mencionadas")
             fig_scatter.update_yaxes(title_text="Frecuencia de menciones")
             fig_scatter.update_layout(height=500)
-            st.plotly_chart(fig_scatter, use_container_width=True)
+            st.plotly_chart(fig_scatter, width="stretch")
 
 
 def _render_detailed_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro_mdm):

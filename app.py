@@ -9,6 +9,13 @@ from google_drive_client import (
     conectar_duckdb_parquet,
     obtener_metadatos_basicos
 )
+from logger_config import (
+    logger,
+    log_session_event,
+    log_error_with_context,
+    LoggingContext,
+    log_streamlit_event
+)
 
 st.set_page_config(
     page_title="Dashboard de Similitudes Jerárquicas",
@@ -25,6 +32,7 @@ def _validar_sesion_activa(timeout_minutos: int = 30) -> bool:
     - Detecta inactividad del usuario (último tiempo registrado)
     - Limpia recursos (DuckDB connection) después de timeout
     - Retorna True si sesión está activa, False si expiró
+    - Logs all session lifecycle events for monitoring
 
     Args:
         timeout_minutos: Minutos de inactividad antes de expirar sesión (default: 30)
@@ -33,10 +41,12 @@ def _validar_sesion_activa(timeout_minutos: int = 30) -> bool:
         bool: True si sesión activa, False si expiró
     """
     ahora = datetime.now()
+    session_id = st.session_state.get('session_id', 'unknown')
 
     # Inicializar timestamp de actividad si no existe
     if 'ultima_actividad' not in st.session_state:
         st.session_state.ultima_actividad = ahora
+        log_session_event('SESSION_INITIALIZED', session_id)
         return True
 
     # Calcular tiempo desde última actividad
@@ -44,12 +54,17 @@ def _validar_sesion_activa(timeout_minutos: int = 30) -> bool:
 
     # Si pasó el timeout, limpiar recursos y retornar False
     if tiempo_inactivo > timedelta(minutes=timeout_minutos):
+        log_session_event('SESSION_TIMEOUT', session_id,
+                         details={'timeout_minutes': timeout_minutos,
+                                 'inactive_minutes': tiempo_inactivo.total_seconds() / 60})
+
         # Cerrar conexión DuckDB si existe
         if 'duckdb_conn' in st.session_state and st.session_state.duckdb_conn:
             try:
                 st.session_state.duckdb_conn.close()
-            except:
-                pass
+                log_session_event('CONNECTION_CLOSED', session_id)
+            except Exception as e:
+                log_error_with_context(e, 'Connection cleanup on timeout', session_id=session_id)
             st.session_state.duckdb_conn = None
 
         # Limpiar timestamp de actividad para nueva sesión
@@ -87,27 +102,58 @@ def main():
 
     # IMPROVEMENT #5: Validar sesión activa y limpiar recursos si expiró
     if not _validar_sesion_activa(timeout_minutos=30):
+        log_streamlit_event('SESSION_EXPIRED')
         st.warning("⏱️ Sesión expirada por inactividad (30 minutos). Recargando...")
         time.sleep(1)
         st.rerun()
 
     # IMPROVEMENT #6: Inicializar sesión única de usuario
     session_id = _inicializar_sesion_usuario()
+    log_session_event('SESSION_ACTIVE', session_id)
 
     # Inicializar conexión a DuckDB
     if 'duckdb_conn' not in st.session_state:
-        conn = conectar_duckdb_parquet()
-        st.session_state.duckdb_conn = conn
+        with LoggingContext('Database Connection', log_details={'session_id': session_id}):
+            try:
+                conn = conectar_duckdb_parquet()
+                st.session_state.duckdb_conn = conn
 
-        if conn is None:
-            st.error("❌ No se pudo conectar a la base de datos")
-            st.stop()
+                if conn is None:
+                    log_error_with_context(
+                        Exception("DuckDB connection returned None"),
+                        "Database initialization",
+                        session_id=session_id
+                    )
+                    st.error("❌ No se pudo conectar a la base de datos")
+                    st.stop()
+
+                log_session_event('DATABASE_CONNECTED', session_id)
+
+            except Exception as e:
+                log_error_with_context(e, "Database connection initialization", session_id=session_id)
+                st.error(f"❌ Error conectando a la base de datos: {str(e)}")
+                st.stop()
 
     # Cargar metadatos básicos
-    metadatos = obtener_metadatos_basicos()
-    if not metadatos:
-        st.error("❌ No se pudieron obtener los metadatos")
-        st.stop()
+    with LoggingContext('Load Metadata', log_details={'session_id': session_id}):
+        try:
+            metadatos = obtener_metadatos_basicos()
+            if not metadatos:
+                log_error_with_context(
+                    Exception("Metadata query returned empty"),
+                    "Metadata loading",
+                    session_id=session_id
+                )
+                st.error("❌ No se pudieron obtener los metadatos")
+                st.stop()
+
+            log_session_event('METADATA_LOADED', session_id,
+                            details={'total_registros': metadatos.get('total_registros', 0)})
+
+        except Exception as e:
+            log_error_with_context(e, "Metadata loading", session_id=session_id)
+            st.error(f"❌ Error cargando metadatos: {str(e)}")
+            st.stop()
 
     # Información del sidebar
     st.sidebar.markdown("# Objetivo del dashboard:")
