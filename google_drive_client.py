@@ -62,12 +62,13 @@ def _obtener_ruta_parquet_cacheada(file_id: str) -> Optional[str]:
     return _descargar_parquet_con_reintentos(file_id, max_reintentos=3)
 
 
-@st.cache_resource
+@st.cache_resource(ttl=600)  # ✅ FIX: Auto-refresh connection every 10 minutes to prevent timeout
 def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
     """
-    ✅ MEJORA #1: Caching de conexión DuckDB con @st.cache_resource
+    ✅ MEJORA #1: Caching de conexión DuckDB con @st.cache_resource + TTL
 
-    La conexión se crea UNA VEZ por sesión Streamlit y se reutiliza.
+    La conexión se crea UNA VEZ y se reutiliza durante 10 minutos.
+    Después se recrea automáticamente para evitar timeouts.
     Esto evita recargar los 4.2M registros en cada interacción.
 
     Streamlit maneja isolación entre usuarios automáticamente
@@ -155,6 +156,63 @@ def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
         return None
 
 
+def _validar_conexion_activa(conn: Optional[duckdb.DuckDBPyConnection]) -> bool:
+    """
+    ✅ FIX: Valida que la conexión DuckDB esté activa y funcional.
+
+    Previene errores "Connection already closed" ejecutando
+    una query simple de prueba.
+
+    Args:
+        conn: Conexión DuckDB a validar
+
+    Returns:
+        True si conexión está activa, False si está cerrada/inválida
+    """
+    if conn is None:
+        return False
+
+    try:
+        # Query simple para verificar conexión activa
+        conn.execute("SELECT 1").fetchone()
+        return True
+    except Exception as e:
+        logger.warning(f"Connection validation failed: {str(e)}")
+        return False
+
+
+def _obtener_conexion_valida() -> Optional[duckdb.DuckDBPyConnection]:
+    """
+    ✅ FIX: Obtiene conexión válida, recreándola si está cerrada.
+
+    Esta función implementa la lógica de reconexión automática:
+    1. Intenta obtener conexión de session_state
+    2. Valida que esté activa
+    3. Si está cerrada, la recrea
+    4. Guarda nueva conexión en session_state
+
+    Returns:
+        Conexión DuckDB válida o None si falla
+    """
+    conn = st.session_state.get('duckdb_conn')
+
+    # Si conexión existe y está activa, usarla
+    if _validar_conexion_activa(conn):
+        return conn
+
+    # Conexión cerrada o inexistente, recrear
+    logger.info("Connection closed or invalid, recreating...")
+    conn = conectar_duckdb_parquet()
+
+    if conn:
+        st.session_state.duckdb_conn = conn
+        logger.info("Connection recreated successfully")
+    else:
+        logger.error("Failed to recreate connection")
+
+    return conn
+
+
 def obtener_metadatos_basicos() -> Dict[str, Any]:
     """
     Obtiene métricas básicas del dataset.
@@ -166,13 +224,10 @@ def obtener_metadatos_basicos() -> Dict[str, Any]:
         Diccionario con estadísticas generales
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = _obtener_conexion_valida()
         if not conn:
-            conn = conectar_duckdb_parquet()
-            if conn:
-                st.session_state.duckdb_conn = conn
-            else:
-                return {}
+            return {}
 
         resultado = conn.execute("""
             SELECT 
@@ -264,7 +319,8 @@ def consultar_datos_filtrados(umbral_similitud: float,
         DataFrame con datos filtrados
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
@@ -327,7 +383,8 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
         DataFrame con estadísticas departamentales
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
@@ -424,7 +481,8 @@ def obtener_ranking_municipios(umbral_similitud: float,
         DataFrame ordenado por ranking
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
@@ -493,7 +551,8 @@ def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
         DataFrame con top recomendaciones
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
@@ -558,7 +617,8 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
         DataFrame con municipios ordenados por frecuencia
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
@@ -597,7 +657,8 @@ def obtener_todos_los_municipios() -> pd.DataFrame:
         DataFrame con código, nombre de municipio y departamento
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
@@ -627,7 +688,8 @@ def obtener_todos_los_departamentos() -> pd.DataFrame:
         DataFrame con código y nombre de departamento
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
