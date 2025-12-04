@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from google_drive_client import consultar_datos_filtrados
+from google_drive_client import consultar_datos_filtrados, obtener_conexion_valida
+from utils import to_csv_utf8_bom
 
 
 def obtener_todos_los_departamentos_territorio() -> pd.DataFrame:
@@ -12,7 +13,8 @@ def obtener_todos_los_departamentos_territorio() -> pd.DataFrame:
         DataFrame con departamentos disponibles
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
@@ -47,7 +49,8 @@ def obtener_ranking_departamentos(umbral_similitud: float,
         DataFrame ordenado por ranking
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
@@ -86,21 +89,6 @@ def obtener_ranking_departamentos(umbral_similitud: float,
     except Exception as e:
         st.error(f"Error generando ranking departamental: {str(e)}")
         return pd.DataFrame()
-
-
-def to_csv_utf8_bom(df):
-    """
-    Convierte DataFrame a CSV con codificación UTF-8 BOM
-
-    Args:
-        df: DataFrame a convertir
-
-    Returns:
-        Bytes del CSV con BOM UTF-8
-    """
-    csv_string = df.to_csv(index=False, encoding='utf-8')
-    csv_bytes = '\ufeff' + csv_string
-    return csv_bytes.encode('utf-8')
 
 
 def render_ficha_departamental():

@@ -1,7 +1,6 @@
 import streamlit as st
-import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from vista_general import render_vista_general
 from vista_departamental import render_ficha_departamental
 from vista_municipal import render_ficha_municipal
@@ -22,58 +21,6 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
-
-
-def _validar_sesion_activa(timeout_minutos: int = 30) -> bool:
-    """
-    Valida si la sesión sigue activa según tiempo de inactividad.
-
-    Características:
-    - Detecta inactividad del usuario (último tiempo registrado)
-    - Limpia recursos (DuckDB connection) después de timeout
-    - Retorna True si sesión está activa, False si expiró
-    - Logs all session lifecycle events for monitoring
-
-    Args:
-        timeout_minutos: Minutos de inactividad antes de expirar sesión (default: 30)
-
-    Returns:
-        bool: True si sesión activa, False si expiró
-    """
-    ahora = datetime.now()
-    session_id = st.session_state.get('session_id', 'unknown')
-
-    # Inicializar timestamp de actividad si no existe
-    if 'ultima_actividad' not in st.session_state:
-        st.session_state.ultima_actividad = ahora
-        log_session_event('SESSION_INITIALIZED', session_id)
-        return True
-
-    # Calcular tiempo desde última actividad
-    tiempo_inactivo = ahora - st.session_state.ultima_actividad
-
-    # Si pasó el timeout, limpiar recursos y retornar False
-    if tiempo_inactivo > timedelta(minutes=timeout_minutos):
-        log_session_event('SESSION_TIMEOUT', session_id,
-                         details={'timeout_minutes': timeout_minutos,
-                                 'inactive_minutes': tiempo_inactivo.total_seconds() / 60})
-
-        # Cerrar conexión DuckDB si existe
-        if 'duckdb_conn' in st.session_state and st.session_state.duckdb_conn:
-            try:
-                st.session_state.duckdb_conn.close()
-                log_session_event('CONNECTION_CLOSED', session_id)
-            except Exception as e:
-                log_error_with_context(e, 'Connection cleanup on timeout', session_id=session_id)
-            st.session_state.duckdb_conn = None
-
-        # Limpiar timestamp de actividad para nueva sesión
-        del st.session_state.ultima_actividad
-        return False
-
-    # Actualizar timestamp de actividad (el usuario sigue activo)
-    st.session_state.ultima_actividad = ahora
-    return True
 
 
 def _inicializar_sesion_usuario() -> str:
@@ -100,14 +47,10 @@ def _inicializar_sesion_usuario() -> str:
 def main():
     st.markdown("# 📊 Dashboard de Similitudes Jerárquicas")
 
-    # IMPROVEMENT #5: Validar sesión activa y limpiar recursos si expiró
-    if not _validar_sesion_activa(timeout_minutos=30):
-        log_streamlit_event('SESSION_EXPIRED')
-        st.warning("⏱️ Sesión expirada por inactividad (30 minutos). Recargando...")
-        time.sleep(1)
-        st.rerun()
+    # ✅ SIMPLIFIED: Removed custom session timeout logic
+    # Streamlit handles session management automatically
 
-    # IMPROVEMENT #6: Inicializar sesión única de usuario
+    # Initialize unique session for tracking
     session_id = _inicializar_sesion_usuario()
     log_session_event('SESSION_ACTIVE', session_id)
 

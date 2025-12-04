@@ -5,7 +5,8 @@ from google_drive_client import (
     obtener_ranking_municipios,
     obtener_top_recomendaciones,
     obtener_municipios_por_recomendacion,
-    obtener_estadisticas_departamentales
+    obtener_estadisticas_departamentales,
+    obtener_conexion_valida
 )
 
 
@@ -56,7 +57,8 @@ def obtener_metadatos_filtrados(umbral_similitud, filtro_pdet, filtro_iica, filt
         Diccionario con estadísticas filtradas
     """
     try:
-        conn = st.session_state.get('duckdb_conn')
+        # ✅ FIX: Use validated connection with auto-reconnect
+        conn = obtener_conexion_valida()
         if not conn:
             return {}
 
