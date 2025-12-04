@@ -10,7 +10,6 @@ from google_drive_client import (
     obtener_todos_los_municipios,
     obtener_todos_los_departamentos
 )
-from utils import to_csv_utf8_bom
 
 
 def create_variable_dictionary():
@@ -52,6 +51,21 @@ def create_variable_dictionary():
         ]
     }
     return pd.DataFrame(dictionary)
+
+
+def to_csv_utf8_bom(df):
+    """
+    Convierte DataFrame a CSV con codificación UTF-8 BOM
+
+    Args:
+        df: DataFrame a convertir
+
+    Returns:
+        Bytes del CSV con BOM UTF-8
+    """
+    csv_string = df.to_csv(index=False, encoding='utf-8')
+    csv_bytes = '\ufeff' + csv_string
+    return csv_bytes.encode('utf-8')
 
 
 def render_ficha_municipal():

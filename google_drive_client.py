@@ -181,18 +181,15 @@ def _validar_conexion_activa(conn: Optional[duckdb.DuckDBPyConnection]) -> bool:
         return False
 
 
-def obtener_conexion_valida() -> Optional[duckdb.DuckDBPyConnection]:
+def _obtener_conexion_valida() -> Optional[duckdb.DuckDBPyConnection]:
     """
     ✅ FIX: Obtiene conexión válida, recreándola si está cerrada.
 
     Esta función implementa la lógica de reconexión automática:
     1. Intenta obtener conexión de session_state
     2. Valida que esté activa
-    3. Si está cerrada, LIMPIA EL CACHE y recrea
+    3. Si está cerrada, la recrea
     4. Guarda nueva conexión en session_state
-
-    CRITICAL: Debe limpiar cache antes de reconectar, sino obtendrá
-    la misma conexión cerrada del cache.
 
     Returns:
         Conexión DuckDB válida o None si falla
@@ -205,10 +202,6 @@ def obtener_conexion_valida() -> Optional[duckdb.DuckDBPyConnection]:
 
     # Conexión cerrada o inexistente, recrear
     logger.info("Connection closed or invalid, recreating...")
-
-    # ✅ CRITICAL FIX: Clear cache to prevent getting same closed connection
-    conectar_duckdb_parquet.clear()
-
     conn = conectar_duckdb_parquet()
 
     if conn:
@@ -232,7 +225,7 @@ def obtener_metadatos_basicos() -> Dict[str, Any]:
     """
     try:
         # ✅ FIX: Use validated connection with auto-reconnect
-        conn = obtener_conexion_valida()
+        conn = _obtener_conexion_valida()
         if not conn:
             return {}
 
@@ -263,9 +256,9 @@ def obtener_metadatos_basicos() -> Dict[str, Any]:
 def construir_filtros_where(filtro_pdet: str = "Todos",
                             filtro_iica: list = None,
                             filtro_ipm: tuple = (0.0, 100.0),
-                            filtro_mdm: list = None) -> tuple[str, list]:
+                            filtro_mdm: list = None) -> str:
     """
-    ✅ SECURITY FIX: Construye cláusula WHERE con placeholders y parámetros separados
+    Construye cláusula WHERE para filtros socioeconómicos
 
     Args:
         filtro_pdet: Filtro PDET
@@ -274,34 +267,29 @@ def construir_filtros_where(filtro_pdet: str = "Todos",
         filtro_mdm: Lista grupos MDM
 
     Returns:
-        Tuple: (WHERE clause con placeholders, lista de parámetros)
+        String con condiciones WHERE adicionales
     """
     conditions = []
-    params = []
 
     if filtro_pdet == "Solo PDET":
-        conditions.append("PDET = ?")
-        params.append(1)
+        conditions.append("PDET = 1")
     elif filtro_pdet == "Solo No PDET":
-        conditions.append("PDET = ?")
-        params.append(0)
+        conditions.append("PDET = 0")
 
     if filtro_iica and len(filtro_iica) > 0:
-        placeholders = ",".join(["?"] * len(filtro_iica))
-        conditions.append(f"Cat_IICA IN ({placeholders})")
-        params.extend(filtro_iica)
+        iica_escaped = [x.replace("'", "''") for x in filtro_iica]
+        iica_list = "','".join(iica_escaped)
+        conditions.append(f"Cat_IICA IN ('{iica_list}')")
 
     if filtro_ipm and filtro_ipm != (0.0, 100.0):
-        conditions.append("IPM_2018 BETWEEN ? AND ?")
-        params.extend([filtro_ipm[0], filtro_ipm[1]])
+        conditions.append(f"IPM_2018 BETWEEN {filtro_ipm[0]} AND {filtro_ipm[1]}")
 
     if filtro_mdm and len(filtro_mdm) > 0:
-        placeholders = ",".join(["?"] * len(filtro_mdm))
-        conditions.append(f"Grupo_MDM IN ({placeholders})")
-        params.extend(filtro_mdm)
+        mdm_escaped = [x.replace("'", "''") for x in filtro_mdm]
+        mdm_list = "','".join(mdm_escaped)
+        conditions.append(f"Grupo_MDM IN ('{mdm_list}')")
 
-    where_clause = " AND " + " AND ".join(conditions) if conditions else ""
-    return where_clause, params
+    return " AND " + " AND ".join(conditions) if conditions else ""
 
 
 def consultar_datos_filtrados(umbral_similitud: float,
@@ -332,47 +320,43 @@ def consultar_datos_filtrados(umbral_similitud: float,
     """
     try:
         # ✅ FIX: Use validated connection with auto-reconnect
-        conn = obtener_conexion_valida()
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
-        # ✅ SECURITY FIX: Build parameterized query
         where_conditions = [
-            "sentence_similarity >= ?",
-            "tipo_territorio = ?"
+            f"sentence_similarity >= {umbral_similitud}",
+            "tipo_territorio = 'Municipio'"
         ]
-        params = [umbral_similitud, 'Municipio']
 
         if solo_politica_publica:
             where_conditions.append(
-                "(predicted_class = ? OR "
-                "(predicted_class = ? AND prediction_confidence < ?))"
+                "(predicted_class = 'Incluida' OR "
+                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
             )
-            params.extend(['Incluida', 'Excluida', 0.8])
 
         if departamento and departamento != 'Todos':
-            where_conditions.append("dpto = ?")
-            params.append(departamento)
+            departamento_escaped = departamento.replace("'", "''")
+            where_conditions.append(f"dpto = '{departamento_escaped}'")
 
         if municipio and municipio != 'Todos':
-            where_conditions.append("mpio = ?")
-            params.append(municipio)
+            municipio_escaped = municipio.replace("'", "''")
+            where_conditions.append(f"mpio = '{municipio_escaped}'")
 
         # Agregar filtros socioeconómicos
-        filtros_where, filtros_params = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
-        where_clause = " AND ".join(where_conditions) + filtros_where
-        params.extend(filtros_params)
+        filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
+        where_clause = " AND ".join(where_conditions) + filtros_adicionales
 
         limit_clause = f"LIMIT {limite}" if limite else ""
 
         query = f"""
-            SELECT * FROM datos_principales
+            SELECT * FROM datos_principales 
             WHERE {where_clause}
             ORDER BY sentence_similarity DESC
             {limit_clause}
         """
 
-        return conn.execute(query, params).df()
+        return conn.execute(query).df()
 
     except Exception as e:
         st.error(f"Error en consulta filtrada: {str(e)}")
@@ -400,37 +384,35 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
     """
     try:
         # ✅ FIX: Use validated connection with auto-reconnect
-        conn = obtener_conexion_valida()
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
-        # ✅ SECURITY FIX: Build parameterized query
-        filtros_where, filtros_params = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
-        params = [umbral_similitud] + filtros_params
+        filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
 
         query = f"""
             WITH recomendaciones_por_municipio AS (
-                SELECT
+                SELECT 
                     dpto_cdpmp,
                     dpto,
                     mpio_cdpmp,
                     mpio,
                     COUNT(DISTINCT recommendation_code) as num_recomendaciones
-                FROM datos_principales
+                FROM datos_principales 
                 WHERE tipo_territorio = 'Municipio'
-                AND sentence_similarity >= ?
-                {filtros_where}
+                AND sentence_similarity >= {umbral_similitud}
+                {filtros_adicionales}
                 GROUP BY dpto_cdpmp, dpto, mpio_cdpmp, mpio
             ),
             ranking_por_depto AS (
-                SELECT
+                SELECT 
                     *,
                     ROW_NUMBER() OVER (PARTITION BY dpto_cdpmp ORDER BY num_recomendaciones ASC) as rank_min,
                     ROW_NUMBER() OVER (PARTITION BY dpto_cdpmp ORDER BY num_recomendaciones DESC) as rank_max
                 FROM recomendaciones_por_municipio
             ),
             municipio_min AS (
-                SELECT
+                SELECT 
                     dpto_cdpmp,
                     mpio as Municipio_Min,
                     num_recomendaciones as Min_Recomendaciones
@@ -438,7 +420,7 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
                 WHERE rank_min = 1
             ),
             municipio_max AS (
-                SELECT
+                SELECT 
                     dpto_cdpmp,
                     mpio as Municipio_Max,
                     num_recomendaciones as Max_Recomendaciones
@@ -446,7 +428,7 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
                 WHERE rank_max = 1
             ),
             stats_generales AS (
-                SELECT
+                SELECT 
                     dpto_cdpmp,
                     dpto as Departamento,
                     COUNT(DISTINCT mpio_cdpmp) as Municipios,
@@ -454,7 +436,7 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
                 FROM recomendaciones_por_municipio
                 GROUP BY dpto_cdpmp, dpto
             )
-            SELECT
+            SELECT 
                 s.dpto_cdpmp,
                 s.Departamento,
                 s.Municipios,
@@ -469,7 +451,7 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
             ORDER BY s.Promedio_Recomendaciones DESC
         """
 
-        return conn.execute(query, params).df()
+        return conn.execute(query).df()
 
     except Exception as e:
         st.error(f"Error en estadísticas departamentales: {str(e)}")
@@ -500,32 +482,28 @@ def obtener_ranking_municipios(umbral_similitud: float,
     """
     try:
         # ✅ FIX: Use validated connection with auto-reconnect
-        conn = obtener_conexion_valida()
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
-        # ✅ SECURITY FIX: Build parameterized query
         where_conditions = [
-            "sentence_similarity >= ?",
-            "tipo_territorio = ?"
+            f"sentence_similarity >= {umbral_similitud}",
+            "tipo_territorio = 'Municipio'"
         ]
-        params = [umbral_similitud, 'Municipio']
 
         if solo_politica_publica:
             where_conditions.append(
-                "(predicted_class = ? OR "
-                "(predicted_class = ? AND prediction_confidence < ?))"
+                "(predicted_class = 'Incluida' OR "
+                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
             )
-            params.extend(['Incluida', 'Excluida', 0.8])
 
-        filtros_where, filtros_params = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
-        where_clause = " AND ".join(where_conditions) + filtros_where
-        params.extend(filtros_params)
+        filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
+        where_clause = " AND ".join(where_conditions) + filtros_adicionales
 
         limit_clause = f"LIMIT {top_n}" if top_n else ""
 
         query = f"""
-            SELECT
+            SELECT 
                 mpio_cdpmp,
                 mpio as Municipio,
                 dpto as Departamento,
@@ -534,14 +512,14 @@ def obtener_ranking_municipios(umbral_similitud: float,
                 AVG(sentence_similarity) as Similitud_Promedio,
                 COUNT(CASE WHEN recommendation_priority = 1 THEN 1 END) as Prioritarias_Implementadas,
                 ROW_NUMBER() OVER (ORDER BY COUNT(DISTINCT recommendation_code) DESC) as Ranking
-            FROM datos_principales
+            FROM datos_principales 
             WHERE {where_clause}
             GROUP BY mpio_cdpmp, mpio, dpto
             ORDER BY Recomendaciones_Implementadas DESC
             {limit_clause}
         """
 
-        return conn.execute(query, params).df()
+        return conn.execute(query).df()
 
     except Exception as e:
         st.error(f"Error generando ranking: {str(e)}")
@@ -574,45 +552,42 @@ def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
     """
     try:
         # ✅ FIX: Use validated connection with auto-reconnect
-        conn = obtener_conexion_valida()
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
-        # ✅ SECURITY FIX: Build parameterized query
         where_conditions = [
-            "sentence_similarity >= ?",
-            "tipo_territorio = ?"
+            f"sentence_similarity >= {umbral_similitud}",
+            "tipo_territorio = 'Municipio'"
         ]
-        params = [umbral_similitud, 'Municipio']
 
         if departamento and departamento != 'Todos':
-            where_conditions.append("dpto = ?")
-            params.append(departamento)
+            departamento_escaped = departamento.replace("'", "''")
+            where_conditions.append(f"dpto = '{departamento_escaped}'")
 
         if municipio and municipio != 'Todos':
-            where_conditions.append("mpio = ?")
-            params.append(municipio)
+            municipio_escaped = municipio.replace("'", "''")
+            where_conditions.append(f"mpio = '{municipio_escaped}'")
 
-        filtros_where, filtros_params = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
-        where_clause = " AND ".join(where_conditions) + filtros_where
-        params.extend(filtros_params)
+        filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
+        where_clause = " AND ".join(where_conditions) + filtros_adicionales
 
         query = f"""
-            SELECT
+            SELECT 
                 recommendation_code as Codigo,
                 recommendation_text as Texto,
                 recommendation_priority as Prioridad,
                 COUNT(*) as Frecuencia_Oraciones,
                 COUNT(DISTINCT mpio_cdpmp) as Municipios_Implementan,
                 AVG(sentence_similarity) as Similitud_Promedio
-            FROM datos_principales
+            FROM datos_principales 
             WHERE {where_clause}
             GROUP BY recommendation_code, recommendation_text, recommendation_priority
             ORDER BY Frecuencia_Oraciones DESC
             LIMIT {limite}
         """
 
-        return conn.execute(query, params).df()
+        return conn.execute(query).df()
 
     except Exception as e:
         st.error(f"Error obteniendo top recomendaciones: {str(e)}")
@@ -643,32 +618,31 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
     """
     try:
         # ✅ FIX: Use validated connection with auto-reconnect
-        conn = obtener_conexion_valida()
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
-        # ✅ SECURITY FIX: Build parameterized query
-        filtros_where, filtros_params = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
-        params = [codigo_recomendacion, umbral_similitud, 'Municipio'] + filtros_params
+        codigo_escaped = codigo_recomendacion.replace("'", "''")
+        filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
 
         query = f"""
-            SELECT
+            SELECT 
                 mpio as Municipio,
                 dpto as Departamento,
                 COUNT(*) as Frecuencia_Oraciones,
                 AVG(sentence_similarity) as Similitud_Promedio,
                 MAX(sentence_similarity) as Similitud_Maxima
-            FROM datos_principales
-            WHERE recommendation_code = ?
-            AND sentence_similarity >= ?
-            AND tipo_territorio = ?
-            {filtros_where}
+            FROM datos_principales 
+            WHERE recommendation_code = '{codigo_escaped}'
+            AND sentence_similarity >= {umbral_similitud}
+            AND tipo_territorio = 'Municipio'
+            {filtros_adicionales}
             GROUP BY mpio, dpto
             ORDER BY Frecuencia_Oraciones DESC, Similitud_Promedio DESC
             LIMIT {limite}
         """
 
-        return conn.execute(query, params).df()
+        return conn.execute(query).df()
 
     except Exception as e:
         st.error(f"Error obteniendo municipios por recomendación: {str(e)}")
@@ -684,7 +658,7 @@ def obtener_todos_los_municipios() -> pd.DataFrame:
     """
     try:
         # ✅ FIX: Use validated connection with auto-reconnect
-        conn = obtener_conexion_valida()
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
@@ -715,7 +689,7 @@ def obtener_todos_los_departamentos() -> pd.DataFrame:
     """
     try:
         # ✅ FIX: Use validated connection with auto-reconnect
-        conn = obtener_conexion_valida()
+        conn = _obtener_conexion_valida()
         if not conn:
             return pd.DataFrame()
 
