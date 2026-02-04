@@ -32,8 +32,8 @@ ENV/
 .streamlit/cache/
 .streamlit/__pycache__/
 
-# Data Files
-*.parquet
+# Data Files (except LFS-tracked parquet in Data/)
+!Data/*.parquet
 *.csv
 *.xlsx
 *.xls

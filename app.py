@@ -23,7 +23,6 @@ def _validar_sesion_activa(timeout_minutos: int = 30) -> bool:
 
     Características:
     - Detecta inactividad del usuario (último tiempo registrado)
-    - Limpia recursos (DuckDB connection) después de timeout
     - Retorna True si sesión está activa, False si expiró
 
     Args:
@@ -42,17 +41,8 @@ def _validar_sesion_activa(timeout_minutos: int = 30) -> bool:
     # Calcular tiempo desde última actividad
     tiempo_inactivo = ahora - st.session_state.ultima_actividad
 
-    # Si pasó el timeout, limpiar recursos y retornar False
+    # Si pasó el timeout, limpiar y retornar False
     if tiempo_inactivo > timedelta(minutes=timeout_minutos):
-        # Cerrar conexión DuckDB si existe
-        if 'duckdb_conn' in st.session_state and st.session_state.duckdb_conn:
-            try:
-                st.session_state.duckdb_conn.close()
-            except:
-                pass
-            st.session_state.duckdb_conn = None
-
-        # Limpiar timestamp de actividad para nueva sesión
         del st.session_state.ultima_actividad
         return False
 
@@ -74,7 +64,6 @@ def _inicializar_sesion_usuario() -> str:
     Returns:
         str: ID único de sesión (UUID4)
     """
-    # IMPROVEMENT #6: Generar ID único de sesión si no existe
     if 'session_id' not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
         st.session_state.session_start = datetime.now()
@@ -85,26 +74,26 @@ def _inicializar_sesion_usuario() -> str:
 def main():
     st.markdown("# 📊 Dashboard de Similitudes Jerárquicas")
 
-    # IMPROVEMENT #5: Validar sesión activa y limpiar recursos si expiró
+    # Validar sesión activa
     if not _validar_sesion_activa(timeout_minutos=30):
         st.warning("⏱️ Sesión expirada por inactividad (30 minutos). Recargando...")
         time.sleep(1)
         st.rerun()
 
-    # IMPROVEMENT #6: Inicializar sesión única de usuario
+    # Inicializar sesión única de usuario
     session_id = _inicializar_sesion_usuario()
 
-    # Inicializar conexión a DuckDB (cached globally, all users share indexed data)
-    if 'duckdb_conn' not in st.session_state:
-        print("[App] Initializing DuckDB connection...")
-        conn = conectar_duckdb_parquet()
-        st.session_state.duckdb_conn = conn
+    # Inicializar conexión a datos (PyArrow-based, cached globally)
+    if 'data_initialized' not in st.session_state:
+        print("[App] Initializing data connection...")
+        success = conectar_duckdb_parquet()
+        st.session_state.data_initialized = success
 
-        if conn is None:
-            st.error("No se pudo cargar los datos. Verifica que el archivo parquet existe en la carpeta Data/")
+        if not success:
+            st.error("No se pudo cargar los datos. Verifica que el archivo parquet existe.")
             st.stop()
         else:
-            print("[App] DuckDB connection initialized successfully")
+            print("[App] Data connection initialized successfully")
 
     # Cargar metadatos básicos
     metadatos = obtener_metadatos_basicos()
@@ -116,9 +105,9 @@ def main():
     st.sidebar.markdown("# Objetivo del dashboard:")
     st.sidebar.markdown(" ")
     st.sidebar.markdown("""
-        Sistema que identifica mediante algoritmos de similitud semántica 
-        la mención de 75 recomendaciones de la Comisión para el Esclarecimiento 
-        de la Verdad (CEV) en los planes de desarrollo territorial (PDT) de 
+        Sistema que identifica mediante algoritmos de similitud semántica
+        la mención de 75 recomendaciones de la Comisión para el Esclarecimiento
+        de la Verdad (CEV) en los planes de desarrollo territorial (PDT) de
         1.028 municipios y 33 departamentos en Colombia.
     """)
     st.sidebar.markdown("---")
@@ -128,11 +117,11 @@ def main():
         st.markdown("""
         ### 📖 ¿Qué es la similitud semántica?
 
-        Es una medida que indica **qué tan parecido es el significado** entre dos textos, 
+        Es una medida que indica **qué tan parecido es el significado** entre dos textos,
         independientemente de las palabras utilizadas. El sistema evalúa qué tan parecido
         es el contenido de una recomendación con la oración de un PDT específico.
 
-        Así, podemos identificar cuándo un plan de desarrollo menciona una recomendación 
+        Así, podemos identificar cuándo un plan de desarrollo menciona una recomendación
         incluso si no usa las mismas palabras, pero expresa la misma idea.
 
         **Escala de interpretación:**
@@ -142,10 +131,10 @@ def main():
 
         **Ejemplo práctico del municipio de Leticia, Amazonas:**
 
-        - **Recomendación MCV1:** Diseñar e implementar políticas públicas con enfoque 
-          de género para erradicar la discriminación y alcanzar la igualdad de las mujeres 
+        - **Recomendación MCV1:** Diseñar e implementar políticas públicas con enfoque
+          de género para erradicar la discriminación y alcanzar la igualdad de las mujeres
           en los territorios.
-        - **Política pública del PDT de Leticia:** Gestión de acciones y movilización de 
+        - **Política pública del PDT de Leticia:** Gestión de acciones y movilización de
           procesos en marco de la política pública de igualdad y equidad de género para la mujer.
         - **Similitud:** 0.9 - Mencionan prácticamente la misma idea con diferentes palabras.
 
@@ -173,7 +162,7 @@ def main():
         ### ⚙️ Filtros principales
 
         **Panel izquierdo (Filtros Globales):**
-        - **Umbral de similitud:** Ajusta qué tan estricto es el filtro 
+        - **Umbral de similitud:** Ajusta qué tan estricto es el filtro
           (0.5 = similitud media, más coincidencias | 0.9 = similitud muy alta, menos coincidencias)
           - Recomendado: 0.65 para balance entre cobertura y calidad
         - **Filtros socioeconómicos:** PDET, IICA, IPM, MDM
