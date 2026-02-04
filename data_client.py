@@ -1,256 +1,78 @@
+"""
+Data client for DuckDB with direct Parquet queries.
+Optimized for Hugging Face Spaces deployment.
+"""
 import streamlit as st
 import pandas as pd
-import gdown
 import duckdb
 import os
-import tempfile
-import time
 from typing import Optional, Dict, Any
 
-# Import logging configuration
-try:
-    from logger_config import logger, log_database_operation, log_query_performance, LoggingContext
-except ImportError:
-    # Fallback if logger_config is not yet available
-    import logging
-    logger = logging.getLogger("google_drive_client")
-
-
-def _descargar_parquet_con_reintentos(file_id: str, max_reintentos: int = 3) -> Optional[str]:
-    """
-    Descarga archivo Parquet desde Google Drive con reintentos exponenciales.
-
-    Reintentos: 5s, 10s, 20s con timeout de 120s cada intento.
-    """
-    temp_dir = tempfile.gettempdir()
-    parquet_path = os.path.join(temp_dir, f"dashboard_{file_id[:8]}.parquet")
-
-    # Si el archivo ya existe, validar integridad
-    if os.path.exists(parquet_path):
-        try:
-            with open(parquet_path, 'rb') as f:
-                header = f.read(4)
-                if header == b'PAR1':  # Parquet magic number
-                    return parquet_path
-        except:
-            os.remove(parquet_path)  # Archivo corrupto, eliminar
-
-    url = f"https://drive.google.com/uc?id={file_id}"
-
-    for intento in range(max_reintentos):
-        try:
-            with st.spinner(f'📥 Descargando datos (intento {intento + 1}/{max_reintentos})...'):
-                gdown.download(url, parquet_path, quiet=False)
-            st.success("✅ Datos descargados exitosamente")
-            return parquet_path
-
-        except Exception as e:
-            if intento < max_reintentos - 1:
-                espera = 5 * (2 ** intento)  # Exponential backoff: 5s, 10s, 20s
-                st.warning(f"⚠️ Intento {intento + 1} falló. Reintentando en {espera}s...")
-                time.sleep(espera)
-            else:
-                st.error(f"❌ Error al descargar datos después de {max_reintentos} intentos: {str(e)}")
-                return None
+# Path to local parquet file
+PARQUET_PATH = "Data/Data Final Dashboard.parquet"
 
 
 @st.cache_resource
-def _obtener_ruta_parquet_cacheada(file_id: str) -> Optional[str]:
+def get_duckdb_connection() -> Optional[duckdb.DuckDBPyConnection]:
     """
-    Cachea SOLO la descarga del archivo Parquet (es cara).
-    """
-    return _descargar_parquet_con_reintentos(file_id, max_reintentos=3)
+    Creates a DuckDB connection optimized for HF Spaces.
 
-
-@st.cache_resource(ttl=600)  # ✅ FIX: Auto-refresh connection every 10 minutes to prevent timeout
-def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
-    """
-    ✅ MEJORA #1: Caching de conexión DuckDB con @st.cache_resource + TTL
-
-    La conexión se crea UNA VEZ y se reutiliza durante 10 minutos.
-    Después se recrea automáticamente para evitar timeouts.
-    Esto evita recargar los 4.2M registros en cada interacción.
-
-    Streamlit maneja isolación entre usuarios automáticamente
-    (cada usuario obtiene su propio cache).
+    Uses direct parquet queries (no table creation) for:
+    - Lower memory footprint
+    - Faster cold starts
+    - Better concurrent user support
 
     Returns:
-        Conexión DuckDB o None si hay error
+        DuckDB connection or None if error
     """
-    import time as time_module
-    start_time = time_module.time()
-
     try:
-        # Obtener ID del archivo desde secrets
-        try:
-            file_id = st.secrets["PARQUET_FILE_ID"]
-        except Exception as e:
-            logger.error(f"PARQUET_FILE_ID not configured in secrets: {str(e)}")
-            st.error("⚠️ Configura PARQUET_FILE_ID en Streamlit secrets")
+        # Verify parquet file exists
+        if not os.path.exists(PARQUET_PATH):
+            st.error(f"Archivo de datos no encontrado: {PARQUET_PATH}")
             return None
 
-        # Obtener ruta del archivo (descargado y cacheado)
-        parquet_path = _obtener_ruta_parquet_cacheada(file_id)
-        if parquet_path is None:
-            logger.error(f"Failed to download/cache parquet file: {file_id}")
-            return None
+        # Create in-memory connection
+        conn = duckdb.connect(":memory:")
 
-        logger.debug(f"Parquet file loaded: {parquet_path}")
+        # HF Spaces has 16GB RAM - use 2GB for DuckDB
+        conn.execute("SET memory_limit='2GB'")
+        conn.execute("SET threads=2")
 
-        # Crear conexión DuckDB - CACHEADA para toda la sesión
-        conn = duckdb.connect(':memory:')
-        logger.debug("DuckDB in-memory connection created")
+        # Verify connection works with a simple query
+        count = conn.execute(f"""
+            SELECT COUNT(*) FROM read_parquet('{PARQUET_PATH}')
+        """).fetchone()[0]
 
-        # ✅ MEJORA #2: Optimized memory and threading for Streamlit Cloud
-        conn.execute("SET memory_limit='512MB'")  # Incrementado: 256MB -> 512MB (usa todos los recursos)
-        conn.execute("SET threads=2")  # Incrementado: 1 -> 2 (permite paralelización)
-        conn.execute("PRAGMA temp_directory='/tmp'")  # Disk overflow para graceful degradation
-        logger.debug("DuckDB configuration applied: memory_limit=512MB, threads=2")
-
-        # ✅ MEJORA #3: Create table from Parquet (not a view)
-        # This allows us to create indexes on the actual table
-        logger.debug("Loading parquet data into DuckDB table...")
-        conn.execute(f"""
-            CREATE TABLE datos_principales AS
-            SELECT * FROM read_parquet('{parquet_path}')
-        """)
-        logger.debug("Table datos_principales created successfully")
-
-        # Create indexes on frequently filtered columns
-        # Estos índices aceleran queries hasta 10x
-        logger.debug("Creating database indexes...")
-        conn.execute("CREATE INDEX idx_similarity ON datos_principales(sentence_similarity)")
-        conn.execute("CREATE INDEX idx_recommendation ON datos_principales(recommendation_code)")
-        conn.execute("CREATE INDEX idx_municipality ON datos_principales(mpio_cdpmp)")
-        conn.execute("CREATE INDEX idx_department ON datos_principales(dpto_cdpmp)")
-        conn.execute("CREATE INDEX idx_territorio ON datos_principales(tipo_territorio)")
-        logger.debug("All indexes created successfully")
-
-        # Verificar conexión
-        total = conn.execute("SELECT COUNT(*) FROM datos_principales").fetchone()[0]
-        duration_ms = (time_module.time() - start_time) * 1000
-
-        log_database_operation(
-            operation='CONNECT_AND_LOAD',
-            table='datos_principales',
-            status='SUCCESS',
-            duration_ms=duration_ms,
-            row_count=total
-        )
-
-        st.sidebar.success(f"📊 Registros: {total:,} | ✨ Optimizado")
-        logger.info(f"Database connection established successfully with {total:,} records in {duration_ms:.2f}ms")
+        st.sidebar.success(f"Registros: {count:,}")
 
         return conn
 
     except Exception as e:
-        duration_ms = (time_module.time() - start_time) * 1000
-        log_database_operation(
-            operation='CONNECT_AND_LOAD',
-            table='datos_principales',
-            status='FAILED',
-            duration_ms=duration_ms,
-            error=e
-        )
-        st.error(f"❌ Error conectando a base de datos: {str(e)}")
+        st.error(f"Error conectando a base de datos: {str(e)}")
         return None
 
 
-def _validar_conexion_activa(conn: Optional[duckdb.DuckDBPyConnection]) -> bool:
-    """
-    ✅ FIX: Valida que la conexión DuckDB esté activa y funcional.
-
-    Previene errores "Connection already closed" ejecutando
-    una query simple de prueba.
-
-    Args:
-        conn: Conexión DuckDB a validar
-
-    Returns:
-        True si conexión está activa, False si está cerrada/inválida
-    """
-    if conn is None:
-        return False
-
-    try:
-        # Query simple para verificar conexión activa
-        conn.execute("SELECT 1").fetchone()
-        return True
-    except Exception as e:
-        logger.warning(f"Connection validation failed: {str(e)}")
-        return False
-
-
-def _obtener_conexion_valida() -> Optional[duckdb.DuckDBPyConnection]:
-    """
-    ✅ FIX: Obtiene conexión válida, recreándola si está cerrada.
-
-    Esta función implementa la lógica de reconexión automática:
-    1. Intenta obtener conexión de session_state
-    2. Valida que esté activa
-    3. Si está cerrada, la recrea
-    4. Guarda nueva conexión en session_state
-
-    Returns:
-        Conexión DuckDB válida o None si falla
-    """
+def _get_connection() -> Optional[duckdb.DuckDBPyConnection]:
+    """Get valid connection, creating if needed."""
     conn = st.session_state.get('duckdb_conn')
 
-    # Si conexión existe y está activa, usarla
-    if _validar_conexion_activa(conn):
-        return conn
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1").fetchone()
+            return conn
+        except:
+            pass
 
-    # Conexión cerrada o inexistente, recrear
-    logger.info("Connection closed or invalid, recreating...")
-    conn = conectar_duckdb_parquet()
-
+    # Connection closed or doesn't exist, get new one
+    conn = get_duckdb_connection()
     if conn:
         st.session_state.duckdb_conn = conn
-        logger.info("Connection recreated successfully")
-    else:
-        logger.error("Failed to recreate connection")
-
     return conn
 
 
-def obtener_metadatos_basicos() -> Dict[str, Any]:
-    """
-    Obtiene métricas básicas del dataset.
-
-    ⚠️ NO CACHEADA: Cada usuario necesita datos frescos.
-    El @st.cache_data global causaba metadata stale para usuarios concurrentes.
-
-    Returns:
-        Diccionario con estadísticas generales
-    """
-    try:
-        # ✅ FIX: Use validated connection with auto-reconnect
-        conn = _obtener_conexion_valida()
-        if not conn:
-            return {}
-
-        resultado = conn.execute("""
-            SELECT 
-                COUNT(*) as total_registros,
-                COUNT(DISTINCT dpto) as total_departamentos,
-                COUNT(DISTINCT mpio_cdpmp) as total_municipios,
-                COUNT(DISTINCT recommendation_code) as total_recomendaciones,
-                AVG(sentence_similarity) as similitud_promedio
-            FROM datos_principales
-            WHERE tipo_territorio = 'Municipio'
-        """).fetchone()
-
-        return {
-            'total_registros': resultado[0],
-            'total_departamentos': resultado[1],
-            'total_municipios': resultado[2],
-            'total_recomendaciones': resultado[3],
-            'similitud_promedio': resultado[4]
-        }
-
-    except Exception as e:
-        st.error(f"Error obteniendo metadatos: {str(e)}")
-        return {}
+def _parquet_source() -> str:
+    """Returns the parquet read expression for queries."""
+    return f"read_parquet('{PARQUET_PATH}')"
 
 
 def construir_filtros_where(filtro_pdet: str = "Todos",
@@ -258,10 +80,10 @@ def construir_filtros_where(filtro_pdet: str = "Todos",
                             filtro_ipm: tuple = (0.0, 100.0),
                             filtro_mdm: list = None) -> str:
     """
-    Construye cláusula WHERE para filtros socioeconómicos
+    Construye cláusula WHERE para filtros socioeconómicos.
 
     Args:
-        filtro_pdet: Filtro PDET
+        filtro_pdet: Filtro PDET ("Todos", "Solo PDET", "Solo No PDET")
         filtro_iica: Lista categorías IICA
         filtro_ipm: Rango IPM (min, max)
         filtro_mdm: Lista grupos MDM
@@ -292,6 +114,42 @@ def construir_filtros_where(filtro_pdet: str = "Todos",
     return " AND " + " AND ".join(conditions) if conditions else ""
 
 
+def obtener_metadatos_basicos() -> Dict[str, Any]:
+    """
+    Obtiene métricas básicas del dataset.
+
+    Returns:
+        Diccionario con estadísticas generales
+    """
+    try:
+        conn = _get_connection()
+        if not conn:
+            return {}
+
+        resultado = conn.execute(f"""
+            SELECT
+                COUNT(*) as total_registros,
+                COUNT(DISTINCT dpto) as total_departamentos,
+                COUNT(DISTINCT mpio_cdpmp) as total_municipios,
+                COUNT(DISTINCT recommendation_code) as total_recomendaciones,
+                AVG(sentence_similarity) as similitud_promedio
+            FROM {_parquet_source()}
+            WHERE tipo_territorio = 'Municipio'
+        """).fetchone()
+
+        return {
+            'total_registros': resultado[0],
+            'total_departamentos': resultado[1],
+            'total_municipios': resultado[2],
+            'total_recomendaciones': resultado[3],
+            'similitud_promedio': resultado[4]
+        }
+
+    except Exception as e:
+        st.error(f"Error obteniendo metadatos: {str(e)}")
+        return {}
+
+
 def consultar_datos_filtrados(umbral_similitud: float,
                               departamento: str = None,
                               municipio: str = None,
@@ -300,9 +158,10 @@ def consultar_datos_filtrados(umbral_similitud: float,
                               filtro_pdet: str = "Todos",
                               filtro_iica: list = None,
                               filtro_ipm: tuple = (0.0, 100.0),
-                              filtro_mdm: list = None) -> pd.DataFrame:
+                              filtro_mdm: list = None,
+                              tipo_territorio: str = 'Municipio') -> pd.DataFrame:
     """
-    Consulta datos aplicando filtros específicos
+    Consulta datos aplicando filtros específicos.
 
     Args:
         umbral_similitud: Similitud mínima requerida
@@ -314,19 +173,19 @@ def consultar_datos_filtrados(umbral_similitud: float,
         filtro_iica: Lista categorías IICA
         filtro_ipm: Rango IPM
         filtro_mdm: Lista grupos MDM
+        tipo_territorio: 'Municipio' o 'Departamento'
 
     Returns:
         DataFrame con datos filtrados
     """
     try:
-        # ✅ FIX: Use validated connection with auto-reconnect
-        conn = _obtener_conexion_valida()
+        conn = _get_connection()
         if not conn:
             return pd.DataFrame()
 
         where_conditions = [
             f"sentence_similarity >= {umbral_similitud}",
-            "tipo_territorio = 'Municipio'"
+            f"tipo_territorio = '{tipo_territorio}'"
         ]
 
         if solo_politica_publica:
@@ -343,14 +202,17 @@ def consultar_datos_filtrados(umbral_similitud: float,
             municipio_escaped = municipio.replace("'", "''")
             where_conditions.append(f"mpio = '{municipio_escaped}'")
 
-        # Agregar filtros socioeconómicos
-        filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
-        where_clause = " AND ".join(where_conditions) + filtros_adicionales
+        # Add socioeconomic filters only for municipalities
+        if tipo_territorio == 'Municipio':
+            filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
+        else:
+            filtros_adicionales = ""
 
+        where_clause = " AND ".join(where_conditions) + filtros_adicionales
         limit_clause = f"LIMIT {limite}" if limite else ""
 
         query = f"""
-            SELECT * FROM datos_principales 
+            SELECT * FROM {_parquet_source()}
             WHERE {where_clause}
             ORDER BY sentence_similarity DESC
             {limit_clause}
@@ -369,22 +231,14 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
                                          filtro_ipm: tuple = (0.0, 100.0),
                                          filtro_mdm: list = None) -> pd.DataFrame:
     """
-    Calcula estadísticas agregadas por departamento
-    Incluye min/max por municipio dentro de cada departamento
-
-    Args:
-        umbral_similitud: Similitud mínima
-        filtro_pdet: Filtro PDET
-        filtro_iica: Lista categorías IICA
-        filtro_ipm: Rango IPM
-        filtro_mdm: Lista grupos MDM
+    Calcula estadísticas agregadas por departamento.
+    Incluye min/max por municipio dentro de cada departamento.
 
     Returns:
         DataFrame con estadísticas departamentales
     """
     try:
-        # ✅ FIX: Use validated connection with auto-reconnect
-        conn = _obtener_conexion_valida()
+        conn = _get_connection()
         if not conn:
             return pd.DataFrame()
 
@@ -392,27 +246,27 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
 
         query = f"""
             WITH recomendaciones_por_municipio AS (
-                SELECT 
+                SELECT
                     dpto_cdpmp,
                     dpto,
                     mpio_cdpmp,
                     mpio,
                     COUNT(DISTINCT recommendation_code) as num_recomendaciones
-                FROM datos_principales 
+                FROM {_parquet_source()}
                 WHERE tipo_territorio = 'Municipio'
                 AND sentence_similarity >= {umbral_similitud}
                 {filtros_adicionales}
                 GROUP BY dpto_cdpmp, dpto, mpio_cdpmp, mpio
             ),
             ranking_por_depto AS (
-                SELECT 
+                SELECT
                     *,
                     ROW_NUMBER() OVER (PARTITION BY dpto_cdpmp ORDER BY num_recomendaciones ASC) as rank_min,
                     ROW_NUMBER() OVER (PARTITION BY dpto_cdpmp ORDER BY num_recomendaciones DESC) as rank_max
                 FROM recomendaciones_por_municipio
             ),
             municipio_min AS (
-                SELECT 
+                SELECT
                     dpto_cdpmp,
                     mpio as Municipio_Min,
                     num_recomendaciones as Min_Recomendaciones
@@ -420,7 +274,7 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
                 WHERE rank_min = 1
             ),
             municipio_max AS (
-                SELECT 
+                SELECT
                     dpto_cdpmp,
                     mpio as Municipio_Max,
                     num_recomendaciones as Max_Recomendaciones
@@ -428,7 +282,7 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
                 WHERE rank_max = 1
             ),
             stats_generales AS (
-                SELECT 
+                SELECT
                     dpto_cdpmp,
                     dpto as Departamento,
                     COUNT(DISTINCT mpio_cdpmp) as Municipios,
@@ -436,7 +290,7 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
                 FROM recomendaciones_por_municipio
                 GROUP BY dpto_cdpmp, dpto
             )
-            SELECT 
+            SELECT
                 s.dpto_cdpmp,
                 s.Departamento,
                 s.Municipios,
@@ -466,23 +320,13 @@ def obtener_ranking_municipios(umbral_similitud: float,
                                filtro_ipm: tuple = (0.0, 100.0),
                                filtro_mdm: list = None) -> pd.DataFrame:
     """
-    Genera ranking de municipios por número de recomendaciones implementadas
-
-    Args:
-        umbral_similitud: Similitud mínima
-        solo_politica_publica: Filtrar política pública
-        top_n: Número máximo de resultados
-        filtro_pdet: Filtro PDET
-        filtro_iica: Lista categorías IICA
-        filtro_ipm: Rango IPM
-        filtro_mdm: Lista grupos MDM
+    Genera ranking de municipios por número de recomendaciones implementadas.
 
     Returns:
         DataFrame ordenado por ranking
     """
     try:
-        # ✅ FIX: Use validated connection with auto-reconnect
-        conn = _obtener_conexion_valida()
+        conn = _get_connection()
         if not conn:
             return pd.DataFrame()
 
@@ -499,11 +343,10 @@ def obtener_ranking_municipios(umbral_similitud: float,
 
         filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
         where_clause = " AND ".join(where_conditions) + filtros_adicionales
-
         limit_clause = f"LIMIT {top_n}" if top_n else ""
 
         query = f"""
-            SELECT 
+            SELECT
                 mpio_cdpmp,
                 mpio as Municipio,
                 dpto as Departamento,
@@ -512,7 +355,7 @@ def obtener_ranking_municipios(umbral_similitud: float,
                 AVG(sentence_similarity) as Similitud_Promedio,
                 COUNT(CASE WHEN recommendation_priority = 1 THEN 1 END) as Prioritarias_Implementadas,
                 ROW_NUMBER() OVER (ORDER BY COUNT(DISTINCT recommendation_code) DESC) as Ranking
-            FROM datos_principales 
+            FROM {_parquet_source()}
             WHERE {where_clause}
             GROUP BY mpio_cdpmp, mpio, dpto
             ORDER BY Recomendaciones_Implementadas DESC
@@ -535,24 +378,13 @@ def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
                                 filtro_ipm: tuple = (0.0, 100.0),
                                 filtro_mdm: list = None) -> pd.DataFrame:
     """
-    Obtiene las recomendaciones más frecuentemente mencionadas
-
-    Args:
-        umbral_similitud: Similitud mínima
-        departamento: Filtro por departamento
-        municipio: Filtro por municipio
-        limite: Número máximo de recomendaciones
-        filtro_pdet: Filtro PDET
-        filtro_iica: Lista categorías IICA
-        filtro_ipm: Rango IPM
-        filtro_mdm: Lista grupos MDM
+    Obtiene las recomendaciones más frecuentemente mencionadas.
 
     Returns:
         DataFrame con top recomendaciones
     """
     try:
-        # ✅ FIX: Use validated connection with auto-reconnect
-        conn = _obtener_conexion_valida()
+        conn = _get_connection()
         if not conn:
             return pd.DataFrame()
 
@@ -573,14 +405,14 @@ def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
         where_clause = " AND ".join(where_conditions) + filtros_adicionales
 
         query = f"""
-            SELECT 
+            SELECT
                 recommendation_code as Codigo,
                 recommendation_text as Texto,
                 recommendation_priority as Prioridad,
                 COUNT(*) as Frecuencia_Oraciones,
                 COUNT(DISTINCT mpio_cdpmp) as Municipios_Implementan,
                 AVG(sentence_similarity) as Similitud_Promedio
-            FROM datos_principales 
+            FROM {_parquet_source()}
             WHERE {where_clause}
             GROUP BY recommendation_code, recommendation_text, recommendation_priority
             ORDER BY Frecuencia_Oraciones DESC
@@ -602,23 +434,13 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
                                          filtro_ipm: tuple = (0.0, 100.0),
                                          filtro_mdm: list = None) -> pd.DataFrame:
     """
-    Obtiene municipios que mencionan una recomendación específica
-
-    Args:
-        codigo_recomendacion: Código de la recomendación
-        umbral_similitud: Similitud mínima
-        limite: Número máximo de municipios
-        filtro_pdet: Filtro PDET
-        filtro_iica: Lista categorías IICA
-        filtro_ipm: Rango IPM
-        filtro_mdm: Lista grupos MDM
+    Obtiene municipios que mencionan una recomendación específica.
 
     Returns:
         DataFrame con municipios ordenados por frecuencia
     """
     try:
-        # ✅ FIX: Use validated connection with auto-reconnect
-        conn = _obtener_conexion_valida()
+        conn = _get_connection()
         if not conn:
             return pd.DataFrame()
 
@@ -626,13 +448,13 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
         filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
 
         query = f"""
-            SELECT 
+            SELECT
                 mpio as Municipio,
                 dpto as Departamento,
                 COUNT(*) as Frecuencia_Oraciones,
                 AVG(sentence_similarity) as Similitud_Promedio,
                 MAX(sentence_similarity) as Similitud_Maxima
-            FROM datos_principales 
+            FROM {_parquet_source()}
             WHERE recommendation_code = '{codigo_escaped}'
             AND sentence_similarity >= {umbral_similitud}
             AND tipo_territorio = 'Municipio'
@@ -651,24 +473,23 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
 
 def obtener_todos_los_municipios() -> pd.DataFrame:
     """
-    Obtiene lista completa de municipios únicos disponibles
+    Obtiene lista completa de municipios únicos disponibles.
 
     Returns:
         DataFrame con código, nombre de municipio y departamento
     """
     try:
-        # ✅ FIX: Use validated connection with auto-reconnect
-        conn = _obtener_conexion_valida()
+        conn = _get_connection()
         if not conn:
             return pd.DataFrame()
 
-        query = """
-            SELECT DISTINCT 
+        query = f"""
+            SELECT DISTINCT
                 mpio_cdpmp,
                 mpio as Municipio,
                 dpto_cdpmp,
                 dpto as Departamento
-            FROM datos_principales 
+            FROM {_parquet_source()}
             WHERE tipo_territorio = 'Municipio'
             ORDER BY dpto, mpio
         """
@@ -682,22 +503,21 @@ def obtener_todos_los_municipios() -> pd.DataFrame:
 
 def obtener_todos_los_departamentos() -> pd.DataFrame:
     """
-    Obtiene lista completa de departamentos únicos disponibles
+    Obtiene lista completa de departamentos únicos disponibles.
 
     Returns:
         DataFrame con código y nombre de departamento
     """
     try:
-        # ✅ FIX: Use validated connection with auto-reconnect
-        conn = _obtener_conexion_valida()
+        conn = _get_connection()
         if not conn:
             return pd.DataFrame()
 
-        query = """
-            SELECT DISTINCT 
+        query = f"""
+            SELECT DISTINCT
                 dpto_cdpmp,
                 dpto as Departamento
-            FROM datos_principales 
+            FROM {_parquet_source()}
             WHERE tipo_territorio = 'Municipio'
             ORDER BY dpto
         """
@@ -707,3 +527,44 @@ def obtener_todos_los_departamentos() -> pd.DataFrame:
     except Exception as e:
         st.error(f"Error obteniendo lista de departamentos: {str(e)}")
         return pd.DataFrame()
+
+
+# Alias for backward compatibility with app.py
+def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
+    """Alias for get_duckdb_connection for backward compatibility."""
+    return get_duckdb_connection()
+
+
+def ejecutar_query(query: str) -> pd.DataFrame:
+    """
+    Executes a raw SQL query against the parquet file.
+
+    The query should use 'datos' as the table name, which will be
+    replaced with the actual parquet read expression.
+
+    Example:
+        ejecutar_query("SELECT * FROM datos WHERE dpto = 'Antioquia'")
+
+    Args:
+        query: SQL query with 'datos' as table placeholder
+
+    Returns:
+        DataFrame with query results
+    """
+    try:
+        conn = _get_connection()
+        if not conn:
+            return pd.DataFrame()
+
+        # Replace 'datos' placeholder with parquet source
+        actual_query = query.replace('datos', _parquet_source())
+        return conn.execute(actual_query).df()
+
+    except Exception as e:
+        st.error(f"Error ejecutando query: {str(e)}")
+        return pd.DataFrame()
+
+
+def get_parquet_source() -> str:
+    """Returns the parquet read expression for use in custom queries."""
+    return _parquet_source()

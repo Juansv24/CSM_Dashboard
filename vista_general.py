@@ -1,11 +1,12 @@
 import streamlit as st
 import requests
 import plotly.express as px
-from google_drive_client import (
+from data_client import (
     obtener_ranking_municipios,
     obtener_top_recomendaciones,
     obtener_municipios_por_recomendacion,
-    obtener_estadisticas_departamentales
+    obtener_estadisticas_departamentales,
+    get_parquet_source
 )
 
 
@@ -81,13 +82,13 @@ def obtener_metadatos_filtrados(umbral_similitud, filtro_pdet, filtro_iica, filt
         where_clause = " AND ".join(where_conditions)
 
         query = f"""
-            SELECT 
+            SELECT
                 COUNT(*) as total_registros,
                 COUNT(DISTINCT dpto) as total_departamentos,
                 COUNT(DISTINCT mpio_cdpmp) as total_municipios,
                 COUNT(DISTINCT recommendation_code) as total_recomendaciones,
                 AVG(sentence_similarity) as similitud_promedio
-            FROM datos_principales
+            FROM {get_parquet_source()}
             WHERE {where_clause}
         """
 
@@ -364,13 +365,13 @@ def _render_municipal_map(dpto_code, min_similarity):
 
     # Obtener datos municipales
     query = f"""
-        SELECT 
+        SELECT
             mpio_cdpmp,
             mpio as Municipio,
             dpto as Departamento,
             COUNT(DISTINCT recommendation_code) as Num_Recomendaciones,
             AVG(sentence_similarity) as Similitud_Promedio
-        FROM datos_principales
+        FROM {get_parquet_source()}
         WHERE dpto_cdpmp = '{dpto_code_normalized}'
         AND sentence_similarity >= {min_similarity}
         AND tipo_territorio = 'Municipio'

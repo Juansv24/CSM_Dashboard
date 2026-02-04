@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from google_drive_client import consultar_datos_filtrados
+from data_client import consultar_datos_filtrados, get_parquet_source
 
 
 def obtener_todos_los_departamentos_territorio() -> pd.DataFrame:
@@ -16,11 +16,11 @@ def obtener_todos_los_departamentos_territorio() -> pd.DataFrame:
         if not conn:
             return pd.DataFrame()
 
-        query = """
-            SELECT DISTINCT 
+        query = f"""
+            SELECT DISTINCT
                 dpto_cdpmp,
                 dpto as Departamento
-            FROM datos_principales 
+            FROM {get_parquet_source()}
             WHERE tipo_territorio = 'Departamento'
             ORDER BY dpto
         """
@@ -66,7 +66,7 @@ def obtener_ranking_departamentos(umbral_similitud: float,
         limit_clause = f"LIMIT {top_n}" if top_n else ""
 
         query = f"""
-            SELECT 
+            SELECT
                 dpto_cdpmp,
                 dpto as Departamento,
                 COUNT(DISTINCT recommendation_code) as Recomendaciones_Implementadas,
@@ -74,7 +74,7 @@ def obtener_ranking_departamentos(umbral_similitud: float,
                 AVG(sentence_similarity) as Similitud_Promedio,
                 COUNT(CASE WHEN recommendation_priority = 1 THEN 1 END) as Prioritarias_Implementadas,
                 ROW_NUMBER() OVER (ORDER BY COUNT(DISTINCT recommendation_code) DESC) as Ranking
-            FROM datos_principales 
+            FROM {get_parquet_source()}
             WHERE {where_clause}
             GROUP BY dpto_cdpmp, dpto
             ORDER BY Recomendaciones_Implementadas DESC
@@ -167,7 +167,7 @@ def render_ficha_departamental():
     where_clause = " AND ".join(where_conditions)
 
     query = f"""
-        SELECT * FROM datos_principales 
+        SELECT * FROM {get_parquet_source()}
         WHERE {where_clause}
         ORDER BY sentence_similarity DESC
     """

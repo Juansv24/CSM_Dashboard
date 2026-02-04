@@ -44,8 +44,7 @@ pip-delete-this-directory.txt
 .streamlit/components/
 .streamlit/.streamlit_cache/
 
-# Data Files
-*.parquet
+# Data Files (exclude except for Data/ folder which is needed for deployment)
 *.csv
 *.xlsx
 *.xls
@@ -55,6 +54,8 @@ pip-delete-this-directory.txt
 temp_data/
 downloads/
 cache/
+# Allow parquet files in Data folder for HF Spaces deployment
+!Data/*.parquet
 
 # Logs
 *.log

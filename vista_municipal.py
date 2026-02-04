@@ -4,7 +4,7 @@ import plotly.express as px
 import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
-from google_drive_client import (
+from data_client import (
     consultar_datos_filtrados,
     obtener_ranking_municipios,
     obtener_todos_los_municipios,
