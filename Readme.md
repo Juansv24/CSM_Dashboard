@@ -1,3 +1,14 @@
+---
+title: Dashboard CEV Colombia
+emoji: 📊
+colorFrom: blue
+colorTo: green
+sdk: streamlit
+sdk_version: "1.41.0"
+app_file: app.py
+pinned: false
+---
+
 # Dashboard de Similitudes Jerárquicas - CEV Colombia
 
 Sistema que identifica mediante algoritmos de similitud semántica la mención de 75 recomendaciones de la Comisión para el Esclarecimiento de la Verdad (CEV) en los planes de desarrollo territorial de 1.028 municipios y 33 departamentos en Colombia.
