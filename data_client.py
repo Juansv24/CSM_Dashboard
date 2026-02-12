@@ -23,7 +23,7 @@ DEFAULT_COLUMNS = [
     'sentence_text', 'sentence_similarity',
     'paragraph_text', 'paragraph_similarity',
     'paragraph_id', 'page_number',
-    'sentence_id', 'sentence_id_paragraph',
+    'sentence_id_paragraph',
     'predicted_class', 'prediction_confidence',
     'IPM_2018', 'PDET', 'Cat_IICA', 'Grupo_MDM'
 ]
@@ -258,10 +258,9 @@ def consultar_datos_filtrados(umbral_similitud: float,
         ]
 
         if solo_politica_publica:
-            where_conditions.append(
-                "(predicted_class = 'Incluida' OR "
-                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
-            )
+            where_conditions.append("predicted_class = 'Incluida'")
+        else:
+            where_conditions.append("predicted_class = 'Excluida'")
 
         if departamento and departamento != 'Todos':
             departamento_escaped = departamento.replace("'", "''")
@@ -411,10 +410,9 @@ def obtener_ranking_municipios(umbral_similitud: float,
         ]
 
         if solo_politica_publica:
-            where_conditions.append(
-                "(predicted_class = 'Incluida' OR "
-                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
-            )
+            where_conditions.append("predicted_class = 'Incluida'")
+        else:
+            where_conditions.append("predicted_class = 'Excluida'")
 
         filtro_iica_list = list(filtro_iica) if filtro_iica else None
         filtro_ipm_tuple = tuple(filtro_ipm) if filtro_ipm else (0.0, 100.0)
@@ -471,10 +469,9 @@ def obtener_ranking_municipio_especifico(municipio: str,
         ]
 
         if solo_politica_publica:
-            where_conditions.append(
-                "(predicted_class = 'Incluida' OR "
-                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
-            )
+            where_conditions.append("predicted_class = 'Incluida'")
+        else:
+            where_conditions.append("predicted_class = 'Excluida'")
 
         filtro_iica_list = list(filtro_iica) if filtro_iica else None
         filtro_ipm_tuple = tuple(filtro_ipm) if filtro_ipm else (0.0, 100.0)
@@ -534,10 +531,9 @@ def obtener_ranking_departamento_especifico(departamento: str,
         ]
 
         if solo_politica_publica:
-            where_conditions.append(
-                "(predicted_class = 'Incluida' OR "
-                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
-            )
+            where_conditions.append("predicted_class = 'Incluida'")
+        else:
+            where_conditions.append("predicted_class = 'Excluida'")
 
         where_clause = " AND ".join(where_conditions)
         departamento_escaped = departamento.replace("'", "''")
@@ -777,10 +773,9 @@ def obtener_ranking_departamentos(umbral_similitud: float,
         ]
 
         if solo_politica_publica:
-            where_conditions.append(
-                "(predicted_class = 'Incluida' OR "
-                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
-            )
+            where_conditions.append("predicted_class = 'Incluida'")
+        else:
+            where_conditions.append("predicted_class = 'Excluida'")
 
         where_clause = " AND ".join(where_conditions)
         limit_clause = f"LIMIT {top_n}" if top_n else ""

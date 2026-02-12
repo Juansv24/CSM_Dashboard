@@ -25,7 +25,7 @@ def create_variable_dictionary():
             'recommendation_topic', 'recommendation_priority', 'sentence_text',
             'sentence_similarity', 'paragraph_text', 'paragraph_similarity',
             'paragraph_id', 'page_number', 'predicted_class', 'prediction_confidence',
-            'IPM_2018', 'PDET', 'Cat_IICA', 'Grupo_MDM', 'sentence_id', 'sentence_id_paragraph'
+            'IPM_2018', 'PDET', 'Cat_IICA', 'Grupo_MDM', 'sentence_id_paragraph'
         ],
         'Descripción': [
             'Nombre del municipio',
@@ -46,7 +46,6 @@ def create_variable_dictionary():
             'Indicador PDET (0=No, 1=Sí)',
             'Categoría del Índice de Incidencia del Conflicto Armado',
             'Grupo de Capacidades Iniciales MDM',
-            'Identificador de oración en el documento',
             'Identificador de oración dentro del párrafo'
         ]
     }
