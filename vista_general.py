@@ -6,7 +6,8 @@ from data_client import (
     obtener_top_recomendaciones,
     obtener_municipios_por_recomendacion,
     obtener_estadisticas_departamentales,
-    get_parquet_source
+    obtener_metadatos_filtrados,
+    obtener_datos_mapa_municipal
 )
 
 
@@ -41,70 +42,6 @@ def cargar_geojson_municipios():
     except Exception as e:
         st.error(f"Error cargando GeoJSON municipal: {str(e)}")
         return None
-
-
-def obtener_metadatos_filtrados(umbral_similitud, filtro_pdet, filtro_iica, filtro_mdm):
-    """
-    Obtiene métricas básicas aplicando filtros
-
-    Args:
-        umbral_similitud: Similitud mínima
-        filtro_pdet: Filtro PDET
-        filtro_iica: Lista categorías IICA
-        filtro_mdm: Lista grupos MDM
-
-    Returns:
-        Diccionario con estadísticas filtradas
-    """
-    try:
-        conn = st.session_state.get('duckdb_conn')
-        if not conn:
-            return {}
-
-        where_conditions = [
-            f"sentence_similarity >= {umbral_similitud}",
-            "tipo_territorio = 'Municipio'"
-        ]
-
-        if filtro_pdet == "Solo PDET":
-            where_conditions.append("PDET = 1")
-        elif filtro_pdet == "Solo No PDET":
-            where_conditions.append("PDET = 0")
-
-        if filtro_iica and len(filtro_iica) > 0:
-            iica_list = "','".join(filtro_iica)
-            where_conditions.append(f"Cat_IICA IN ('{iica_list}')")
-
-        if filtro_mdm and len(filtro_mdm) > 0:
-            mdm_list = "','".join(filtro_mdm)
-            where_conditions.append(f"Grupo_MDM IN ('{mdm_list}')")
-
-        where_clause = " AND ".join(where_conditions)
-
-        query = f"""
-            SELECT
-                COUNT(*) as total_registros,
-                COUNT(DISTINCT dpto) as total_departamentos,
-                COUNT(DISTINCT mpio_cdpmp) as total_municipios,
-                COUNT(DISTINCT recommendation_code) as total_recomendaciones,
-                AVG(sentence_similarity) as similitud_promedio
-            FROM {get_parquet_source()}
-            WHERE {where_clause}
-        """
-
-        resultado = conn.execute(query).fetchone()
-
-        return {
-            'total_registros': resultado[0],
-            'total_departamentos': resultado[1],
-            'total_municipios': resultado[2],
-            'total_recomendaciones': resultado[3],
-            'similitud_promedio': resultado[4]
-        }
-
-    except Exception as e:
-        st.error(f"Error obteniendo metadatos filtrados: {str(e)}")
-        return {}
 
 
 def render_vista_general(metadatos, geojson_data=None, dept_data=None, umbral_similitud=0.65):
@@ -153,24 +90,37 @@ def render_vista_general(metadatos, geojson_data=None, dept_data=None, umbral_si
         help="Capacidades Iniciales - Medición de Desempeño Municipal"
     )
 
+    # Convert mutable args to hashable tuples for caching
+    filtro_iica_tuple = tuple(filtro_iica)
+    filtro_mdm_tuple = tuple(filtro_mdm)
+
     # === CARGAR DATOS DEPARTAMENTALES ===
     geojson_data = cargar_geojson()
     dept_data = obtener_estadisticas_departamentales(
         min_similarity,
         filtro_pdet=filtro_pdet,
-        filtro_iica=filtro_iica,
-        filtro_mdm=filtro_mdm
+        filtro_iica=filtro_iica_tuple,
+        filtro_mdm=filtro_mdm_tuple
     ) if geojson_data else None
 
-    # === ANÁLISIS GENERAL ===
-    st.header("📈 Análisis general")
-
+    # === FETCH SHARED DATA ONCE ===
     metadatos_filtrados = obtener_metadatos_filtrados(
         min_similarity,
         filtro_pdet,
-        filtro_iica,
-        filtro_mdm
+        filtro_iica_tuple,
+        filtro_mdm_tuple
     )
+
+    top_recs_50 = obtener_top_recomendaciones(
+        umbral_similitud=min_similarity,
+        limite=50,
+        filtro_pdet=filtro_pdet,
+        filtro_iica=filtro_iica_tuple,
+        filtro_mdm=filtro_mdm_tuple
+    )
+
+    # === ANÁLISIS GENERAL ===
+    st.header("📈 Análisis general")
 
     # Métricas principales
     col1, col2, col3 = st.columns(3)
@@ -203,13 +153,7 @@ def render_vista_general(metadatos, geojson_data=None, dept_data=None, umbral_si
     st.markdown("---")
 
     # Estadísticas de recomendaciones
-    _render_recommendations_stats(
-        min_similarity,
-        metadatos,
-        filtro_pdet,
-        filtro_iica,
-        filtro_mdm
-    )
+    _render_recommendations_stats(metadatos, metadatos_filtrados)
 
     st.markdown("---")
 
@@ -217,8 +161,9 @@ def render_vista_general(metadatos, geojson_data=None, dept_data=None, umbral_si
     _render_implementation_analysis(
         min_similarity,
         filtro_pdet,
-        filtro_iica,
-        filtro_mdm
+        filtro_iica_tuple,
+        filtro_mdm_tuple,
+        top_recs_50
     )
 
     st.markdown("---")
@@ -227,8 +172,9 @@ def render_vista_general(metadatos, geojson_data=None, dept_data=None, umbral_si
     _render_detailed_analysis(
         min_similarity,
         filtro_pdet,
-        filtro_iica,
-        filtro_mdm
+        filtro_iica_tuple,
+        filtro_mdm_tuple,
+        top_recs_50
     )
 
 
@@ -350,10 +296,6 @@ def _render_municipal_map(dpto_code, min_similarity):
     with col2:
         st.subheader("🗺️ Detalle Municipal")
 
-    conn = st.session_state.get('duckdb_conn')
-    if not conn:
-        return
-
     # Cargar GeoJSON municipal
     geojson_municipal = cargar_geojson_municipios()
     if not geojson_municipal:
@@ -363,23 +305,8 @@ def _render_municipal_map(dpto_code, min_similarity):
     # Normalizar código del departamento
     dpto_code_normalized = str(dpto_code).zfill(2)
 
-    # Obtener datos municipales
-    query = f"""
-        SELECT
-            mpio_cdpmp,
-            mpio as Municipio,
-            dpto as Departamento,
-            COUNT(DISTINCT recommendation_code) as Num_Recomendaciones,
-            AVG(sentence_similarity) as Similitud_Promedio
-        FROM {get_parquet_source()}
-        WHERE dpto_cdpmp = '{dpto_code_normalized}'
-        AND sentence_similarity >= {min_similarity}
-        AND tipo_territorio = 'Municipio'
-        GROUP BY mpio_cdpmp, mpio, dpto
-        ORDER BY Num_Recomendaciones DESC
-    """
-
-    municipal_data = conn.execute(query).df()
+    # Obtener datos municipales via data_client (thread-safe + cached)
+    municipal_data = obtener_datos_mapa_municipal(dpto_code, min_similarity)
 
     if municipal_data.empty:
         st.warning("⚠️ No hay datos municipales disponibles")
@@ -447,26 +374,16 @@ def _render_municipal_map(dpto_code, min_similarity):
     )
 
 
-def _render_recommendations_stats(umbral_similitud, metadatos, filtro_pdet, filtro_iica, filtro_mdm):
+def _render_recommendations_stats(metadatos, metadatos_filtrados):
     """
     Renderiza estadísticas de recomendaciones
 
     Args:
-        umbral_similitud: Umbral de similitud
         metadatos: Metadatos básicos
-        filtro_pdet: Filtro PDET
-        filtro_iica: Lista categorías IICA
-        filtro_mdm: Lista grupos MDM
+        metadatos_filtrados: Metadatos con filtros aplicados (pre-fetched)
     """
 
     st.subheader("📋 Estadísticas de recomendaciones mencionadas a nivel nacional")
-
-    metadatos_filtrados = obtener_metadatos_filtrados(
-        umbral_similitud,
-        filtro_pdet,
-        filtro_iica,
-        filtro_mdm
-    )
 
     unique_recommendations = metadatos_filtrados.get('total_recomendaciones', metadatos['total_recomendaciones'])
     total_analyzed = 75
@@ -484,15 +401,16 @@ def _render_recommendations_stats(umbral_similitud, metadatos, filtro_pdet, filt
     st.progress(implementation_rate / 100)
 
 
-def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro_mdm):
+def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro_mdm, top_recs_50):
     """
     Renderiza análisis de implementación con gráficos
 
     Args:
         umbral_similitud: Umbral de similitud
         filtro_pdet: Filtro PDET
-        filtro_iica: Lista categorías IICA
-        filtro_mdm: Lista grupos MDM
+        filtro_iica: Tuple de categorías IICA
+        filtro_mdm: Tuple de grupos MDM
+        top_recs_50: Pre-fetched top 50 recommendations DataFrame
     """
 
     st.subheader("📈 Análisis general de mención")
@@ -500,14 +418,8 @@ def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, 
     col1, col2 = st.columns(2)
 
     with col1:
-        # Top recomendaciones
-        top_recs = obtener_top_recomendaciones(
-            umbral_similitud=umbral_similitud,
-            limite=10,
-            filtro_pdet=filtro_pdet,
-            filtro_iica=filtro_iica,
-            filtro_mdm=filtro_mdm
-        )
+        # Use first 10 from the pre-fetched top 50
+        top_recs = top_recs_50.head(10) if not top_recs_50.empty else top_recs_50
 
         if not top_recs.empty:
             # Crear versión corta del texto para hover (máximo 100 caracteres)
@@ -578,27 +490,22 @@ def _render_implementation_analysis(umbral_similitud, filtro_pdet, filtro_iica, 
             st.plotly_chart(fig_scatter, width="stretch")
 
 
-def _render_detailed_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro_mdm):
+def _render_detailed_analysis(umbral_similitud, filtro_pdet, filtro_iica, filtro_mdm, top_recs_50):
     """
     Renderiza análisis detallado por recomendación con paginación
 
     Args:
         umbral_similitud: Umbral de similitud
         filtro_pdet: Filtro PDET
-        filtro_iica: Lista categorías IICA
-        filtro_mdm: Lista grupos MDM
+        filtro_iica: Tuple de categorías IICA
+        filtro_mdm: Tuple de grupos MDM
+        top_recs_50: Pre-fetched top 50 recommendations DataFrame
     """
 
     st.subheader("🔍 Análisis por recomendación")
 
-    # Obtener lista de recomendaciones
-    top_recs = obtener_top_recomendaciones(
-        umbral_similitud=umbral_similitud,
-        limite=50,
-        filtro_pdet=filtro_pdet,
-        filtro_iica=filtro_iica,
-        filtro_mdm=filtro_mdm
-    )
+    # Use the pre-fetched top 50 recommendations
+    top_recs = top_recs_50
 
     if top_recs.empty:
         st.warning("No hay recomendaciones disponibles")

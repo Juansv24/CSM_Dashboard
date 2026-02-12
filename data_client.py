@@ -1,78 +1,93 @@
 """
-Data client for DuckDB with direct Parquet queries.
+Data client for DuckDB with persistent database.
 Optimized for Hugging Face Spaces deployment.
+Thread-safe: one-time parquet-to-duckdb conversion, read-only connections per query.
 """
 import streamlit as st
 import pandas as pd
 import duckdb
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
-# Path to local parquet file
+# Path to local parquet file and persistent database
 PARQUET_PATH = "Data/Data Final Dashboard.parquet"
+DB_PATH = "Data/dashboard.duckdb"
+DATA_TABLE = "data"
+
+# Default columns used by most views (excludes heavy text fields)
+DEFAULT_COLUMNS = [
+    'mpio_cdpmp', 'mpio', 'dpto_cdpmp', 'dpto',
+    'tipo_territorio',
+    'recommendation_code', 'recommendation_text',
+    'recommendation_topic', 'recommendation_priority',
+    'sentence_text', 'sentence_similarity',
+    'paragraph_text', 'paragraph_similarity',
+    'paragraph_id', 'page_number',
+    'sentence_id', 'sentence_id_paragraph',
+    'predicted_class', 'prediction_confidence',
+    'IPM_2018', 'PDET', 'Cat_IICA', 'Grupo_MDM'
+]
 
 
 @st.cache_resource
-def get_duckdb_connection() -> Optional[duckdb.DuckDBPyConnection]:
+def _init_db() -> str:
     """
-    Creates a DuckDB connection optimized for HF Spaces.
-
-    Uses direct parquet queries (no table creation) for:
-    - Lower memory footprint
-    - Faster cold starts
-    - Better concurrent user support
-
-    Returns:
-        DuckDB connection or None if error
+    One-time conversion of parquet to DuckDB native format.
+    Persists across all sessions. Returns the database path.
     """
-    try:
-        # Verify parquet file exists
-        if not os.path.exists(PARQUET_PATH):
-            st.error(f"Archivo de datos no encontrado: {PARQUET_PATH}")
-            return None
+    if not os.path.exists(PARQUET_PATH):
+        st.error(f"Archivo de datos no encontrado: {PARQUET_PATH}")
+        return ""
 
-        # Create in-memory connection
-        conn = duckdb.connect(":memory:")
-
-        # HF Spaces has 16GB RAM - use 2GB for DuckDB
-        conn.execute("SET memory_limit='2GB'")
-        conn.execute("SET threads=2")
-
-        # Verify connection works with a simple query
-        count = conn.execute(f"""
-            SELECT COUNT(*) FROM read_parquet('{PARQUET_PATH}')
-        """).fetchone()[0]
-
-        st.sidebar.success(f"Registros: {count:,}")
-
-        return conn
-
-    except Exception as e:
-        st.error(f"Error conectando a base de datos: {str(e)}")
-        return None
-
-
-def _get_connection() -> Optional[duckdb.DuckDBPyConnection]:
-    """Get valid connection, creating if needed."""
-    conn = st.session_state.get('duckdb_conn')
-
-    if conn is not None:
+    if not os.path.exists(DB_PATH):
+        conn = duckdb.connect(DB_PATH)
         try:
-            conn.execute("SELECT 1").fetchone()
-            return conn
-        except:
-            pass
+            conn.execute(f"""
+                CREATE TABLE {DATA_TABLE} AS
+                SELECT * FROM read_parquet('{PARQUET_PATH}')
+            """)
+        finally:
+            conn.close()
 
-    # Connection closed or doesn't exist, get new one
-    conn = get_duckdb_connection()
-    if conn:
-        st.session_state.duckdb_conn = conn
-    return conn
+    return DB_PATH
 
 
-def _parquet_source() -> str:
-    """Returns the parquet read expression for queries."""
-    return f"read_parquet('{PARQUET_PATH}')"
+def _get_connection() -> duckdb.DuckDBPyConnection:
+    """
+    Returns a read-only connection to the persistent database.
+    Lightweight: no data loading, just opens the existing file.
+    """
+    db_path = _init_db()
+    return duckdb.connect(db_path, read_only=True)
+
+
+def get_table_name() -> str:
+    """Returns the table name for use in custom queries."""
+    return DATA_TABLE
+
+
+def _execute_query(query: str) -> list:
+    """
+    Execute a query with a read-only connection to the persistent database.
+    Returns raw results as a list of tuples.
+    """
+    conn = _get_connection()
+    try:
+        return conn.execute(query).fetchall()
+    finally:
+        conn.close()
+
+
+def _execute_query_df(query: str) -> pd.DataFrame:
+    """
+    Execute a query with a read-only connection to the persistent database.
+    Returns results as a DataFrame.
+    """
+    conn = _get_connection()
+    try:
+        return conn.execute(query).df()
+    finally:
+        conn.close()
 
 
 def construir_filtros_where(filtro_pdet: str = "Todos",
@@ -114,52 +129,106 @@ def construir_filtros_where(filtro_pdet: str = "Todos",
     return " AND " + " AND ".join(conditions) if conditions else ""
 
 
+@st.cache_data
 def obtener_metadatos_basicos() -> Dict[str, Any]:
     """
     Obtiene métricas básicas del dataset.
+    Cached permanently: underlying data does not change.
 
     Returns:
         Diccionario con estadísticas generales
     """
     try:
-        conn = _get_connection()
-        if not conn:
-            return {}
-
-        resultado = conn.execute(f"""
+        resultado = _execute_query(f"""
             SELECT
                 COUNT(*) as total_registros,
                 COUNT(DISTINCT dpto) as total_departamentos,
                 COUNT(DISTINCT mpio_cdpmp) as total_municipios,
                 COUNT(DISTINCT recommendation_code) as total_recomendaciones,
                 AVG(sentence_similarity) as similitud_promedio
-            FROM {_parquet_source()}
+            FROM {DATA_TABLE}
             WHERE tipo_territorio = 'Municipio'
-        """).fetchone()
+        """)
 
-        return {
-            'total_registros': resultado[0],
-            'total_departamentos': resultado[1],
-            'total_municipios': resultado[2],
-            'total_recomendaciones': resultado[3],
-            'similitud_promedio': resultado[4]
-        }
+        if resultado:
+            row = resultado[0]
+            return {
+                'total_registros': row[0],
+                'total_departamentos': row[1],
+                'total_municipios': row[2],
+                'total_recomendaciones': row[3],
+                'similitud_promedio': row[4]
+            }
+        return {}
 
     except Exception as e:
         st.error(f"Error obteniendo metadatos: {str(e)}")
         return {}
 
 
+@st.cache_data(ttl=300)
+def obtener_metadatos_filtrados(umbral_similitud: float,
+                                filtro_pdet: str = "Todos",
+                                filtro_iica: tuple = (),
+                                filtro_mdm: tuple = ()) -> Dict[str, Any]:
+    """
+    Obtiene métricas básicas aplicando filtros.
+
+    Args:
+        umbral_similitud: Similitud mínima
+        filtro_pdet: Filtro PDET
+        filtro_iica: Tuple de categorías IICA (hashable)
+        filtro_mdm: Tuple de grupos MDM (hashable)
+
+    Returns:
+        Diccionario con estadísticas filtradas
+    """
+    try:
+        filtros_adicionales = construir_filtros_where(
+            filtro_pdet, list(filtro_iica) or None, (0.0, 100.0), list(filtro_mdm) or None
+        )
+
+        resultado = _execute_query(f"""
+            SELECT
+                COUNT(*) as total_registros,
+                COUNT(DISTINCT dpto) as total_departamentos,
+                COUNT(DISTINCT mpio_cdpmp) as total_municipios,
+                COUNT(DISTINCT recommendation_code) as total_recomendaciones,
+                AVG(sentence_similarity) as similitud_promedio
+            FROM {DATA_TABLE}
+            WHERE sentence_similarity >= {umbral_similitud}
+            AND tipo_territorio = 'Municipio'
+            {filtros_adicionales}
+        """)
+
+        if resultado:
+            row = resultado[0]
+            return {
+                'total_registros': row[0],
+                'total_departamentos': row[1],
+                'total_municipios': row[2],
+                'total_recomendaciones': row[3],
+                'similitud_promedio': row[4]
+            }
+        return {}
+
+    except Exception as e:
+        st.error(f"Error obteniendo metadatos filtrados: {str(e)}")
+        return {}
+
+
+@st.cache_data(ttl=300)
 def consultar_datos_filtrados(umbral_similitud: float,
                               departamento: str = None,
                               municipio: str = None,
                               solo_politica_publica: bool = True,
                               limite: int = None,
                               filtro_pdet: str = "Todos",
-                              filtro_iica: list = None,
+                              filtro_iica: tuple = (),
                               filtro_ipm: tuple = (0.0, 100.0),
-                              filtro_mdm: list = None,
-                              tipo_territorio: str = 'Municipio') -> pd.DataFrame:
+                              filtro_mdm: tuple = (),
+                              tipo_territorio: str = 'Municipio',
+                              columns: tuple = None) -> pd.DataFrame:
     """
     Consulta datos aplicando filtros específicos.
 
@@ -170,18 +239,18 @@ def consultar_datos_filtrados(umbral_similitud: float,
         solo_politica_publica: Filtrar solo política pública
         limite: Número máximo de registros
         filtro_pdet: Filtro PDET
-        filtro_iica: Lista categorías IICA
-        filtro_ipm: Rango IPM
-        filtro_mdm: Lista grupos MDM
+        filtro_iica: Tuple de categorías IICA (hashable)
+        filtro_ipm: Rango IPM (min, max)
+        filtro_mdm: Tuple de grupos MDM (hashable)
         tipo_territorio: 'Municipio' o 'Departamento'
+        columns: Tuple of column names to select (None = DEFAULT_COLUMNS)
 
     Returns:
         DataFrame con datos filtrados
     """
     try:
-        conn = _get_connection()
-        if not conn:
-            return pd.DataFrame()
+        cols = list(columns) if columns else DEFAULT_COLUMNS
+        col_list = ", ".join(cols)
 
         where_conditions = [
             f"sentence_similarity >= {umbral_similitud}",
@@ -203,8 +272,14 @@ def consultar_datos_filtrados(umbral_similitud: float,
             where_conditions.append(f"mpio = '{municipio_escaped}'")
 
         # Add socioeconomic filters only for municipalities
+        filtro_iica_list = list(filtro_iica) if filtro_iica else None
+        filtro_ipm_tuple = tuple(filtro_ipm) if filtro_ipm else (0.0, 100.0)
+        filtro_mdm_list = list(filtro_mdm) if filtro_mdm else None
+
         if tipo_territorio == 'Municipio':
-            filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
+            filtros_adicionales = construir_filtros_where(
+                filtro_pdet, filtro_iica_list, filtro_ipm_tuple, filtro_mdm_list
+            )
         else:
             filtros_adicionales = ""
 
@@ -212,24 +287,25 @@ def consultar_datos_filtrados(umbral_similitud: float,
         limit_clause = f"LIMIT {limite}" if limite else ""
 
         query = f"""
-            SELECT * FROM {_parquet_source()}
+            SELECT {col_list} FROM {DATA_TABLE}
             WHERE {where_clause}
             ORDER BY sentence_similarity DESC
             {limit_clause}
         """
 
-        return conn.execute(query).df()
+        return _execute_query_df(query)
 
     except Exception as e:
         st.error(f"Error en consulta filtrada: {str(e)}")
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300)
 def obtener_estadisticas_departamentales(umbral_similitud: float,
                                          filtro_pdet: str = "Todos",
-                                         filtro_iica: list = None,
+                                         filtro_iica: tuple = (),
                                          filtro_ipm: tuple = (0.0, 100.0),
-                                         filtro_mdm: list = None) -> pd.DataFrame:
+                                         filtro_mdm: tuple = ()) -> pd.DataFrame:
     """
     Calcula estadísticas agregadas por departamento.
     Incluye min/max por municipio dentro de cada departamento.
@@ -238,11 +314,13 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
         DataFrame con estadísticas departamentales
     """
     try:
-        conn = _get_connection()
-        if not conn:
-            return pd.DataFrame()
+        filtro_iica_list = list(filtro_iica) if filtro_iica else None
+        filtro_ipm_tuple = tuple(filtro_ipm) if filtro_ipm else (0.0, 100.0)
+        filtro_mdm_list = list(filtro_mdm) if filtro_mdm else None
 
-        filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
+        filtros_adicionales = construir_filtros_where(
+            filtro_pdet, filtro_iica_list, filtro_ipm_tuple, filtro_mdm_list
+        )
 
         query = f"""
             WITH recomendaciones_por_municipio AS (
@@ -252,7 +330,7 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
                     mpio_cdpmp,
                     mpio,
                     COUNT(DISTINCT recommendation_code) as num_recomendaciones
-                FROM {_parquet_source()}
+                FROM {DATA_TABLE}
                 WHERE tipo_territorio = 'Municipio'
                 AND sentence_similarity >= {umbral_similitud}
                 {filtros_adicionales}
@@ -305,20 +383,21 @@ def obtener_estadisticas_departamentales(umbral_similitud: float,
             ORDER BY s.Promedio_Recomendaciones DESC
         """
 
-        return conn.execute(query).df()
+        return _execute_query_df(query)
 
     except Exception as e:
         st.error(f"Error en estadísticas departamentales: {str(e)}")
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300)
 def obtener_ranking_municipios(umbral_similitud: float,
                                solo_politica_publica: bool = True,
                                top_n: int = None,
                                filtro_pdet: str = "Todos",
-                               filtro_iica: list = None,
+                               filtro_iica: tuple = (),
                                filtro_ipm: tuple = (0.0, 100.0),
-                               filtro_mdm: list = None) -> pd.DataFrame:
+                               filtro_mdm: tuple = ()) -> pd.DataFrame:
     """
     Genera ranking de municipios por número de recomendaciones implementadas.
 
@@ -326,10 +405,6 @@ def obtener_ranking_municipios(umbral_similitud: float,
         DataFrame ordenado por ranking
     """
     try:
-        conn = _get_connection()
-        if not conn:
-            return pd.DataFrame()
-
         where_conditions = [
             f"sentence_similarity >= {umbral_similitud}",
             "tipo_territorio = 'Municipio'"
@@ -341,7 +416,13 @@ def obtener_ranking_municipios(umbral_similitud: float,
                 "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
             )
 
-        filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
+        filtro_iica_list = list(filtro_iica) if filtro_iica else None
+        filtro_ipm_tuple = tuple(filtro_ipm) if filtro_ipm else (0.0, 100.0)
+        filtro_mdm_list = list(filtro_mdm) if filtro_mdm else None
+
+        filtros_adicionales = construir_filtros_where(
+            filtro_pdet, filtro_iica_list, filtro_ipm_tuple, filtro_mdm_list
+        )
         where_clause = " AND ".join(where_conditions) + filtros_adicionales
         limit_clause = f"LIMIT {top_n}" if top_n else ""
 
@@ -355,28 +436,151 @@ def obtener_ranking_municipios(umbral_similitud: float,
                 AVG(sentence_similarity) as Similitud_Promedio,
                 COUNT(CASE WHEN recommendation_priority = 1 THEN 1 END) as Prioritarias_Implementadas,
                 ROW_NUMBER() OVER (ORDER BY COUNT(DISTINCT recommendation_code) DESC) as Ranking
-            FROM {_parquet_source()}
+            FROM {DATA_TABLE}
             WHERE {where_clause}
             GROUP BY mpio_cdpmp, mpio, dpto
             ORDER BY Recomendaciones_Implementadas DESC
             {limit_clause}
         """
 
-        return conn.execute(query).df()
+        return _execute_query_df(query)
 
     except Exception as e:
         st.error(f"Error generando ranking: {str(e)}")
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300)
+def obtener_ranking_municipio_especifico(municipio: str,
+                                          umbral_similitud: float,
+                                          solo_politica_publica: bool = True,
+                                          filtro_pdet: str = "Todos",
+                                          filtro_iica: tuple = (),
+                                          filtro_ipm: tuple = (0.0, 100.0),
+                                          filtro_mdm: tuple = ()) -> Dict[str, Any]:
+    """
+    Computes the rank for a specific municipality without loading all rankings.
+
+    Returns:
+        Dict with 'ranking_position' and 'total_municipios'
+    """
+    try:
+        where_conditions = [
+            f"sentence_similarity >= {umbral_similitud}",
+            "tipo_territorio = 'Municipio'"
+        ]
+
+        if solo_politica_publica:
+            where_conditions.append(
+                "(predicted_class = 'Incluida' OR "
+                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
+            )
+
+        filtro_iica_list = list(filtro_iica) if filtro_iica else None
+        filtro_ipm_tuple = tuple(filtro_ipm) if filtro_ipm else (0.0, 100.0)
+        filtro_mdm_list = list(filtro_mdm) if filtro_mdm else None
+
+        filtros_adicionales = construir_filtros_where(
+            filtro_pdet, filtro_iica_list, filtro_ipm_tuple, filtro_mdm_list
+        )
+        where_clause = " AND ".join(where_conditions) + filtros_adicionales
+
+        municipio_escaped = municipio.replace("'", "''")
+
+        query = f"""
+            WITH ranking AS (
+                SELECT
+                    mpio,
+                    COUNT(DISTINCT recommendation_code) as num_recs,
+                    ROW_NUMBER() OVER (ORDER BY COUNT(DISTINCT recommendation_code) DESC) as rank_pos
+                FROM {DATA_TABLE}
+                WHERE {where_clause}
+                GROUP BY mpio
+            )
+            SELECT
+                (SELECT rank_pos FROM ranking WHERE mpio = '{municipio_escaped}') as ranking_position,
+                COUNT(*) as total_municipios
+            FROM ranking
+        """
+
+        resultado = _execute_query(query)
+        if resultado:
+            row = resultado[0]
+            return {
+                'ranking_position': row[0] if row[0] is not None else "N/A",
+                'total_municipios': row[1]
+            }
+        return {'ranking_position': "N/A", 'total_municipios': 0}
+
+    except Exception as e:
+        st.error(f"Error obteniendo ranking específico: {str(e)}")
+        return {'ranking_position': "N/A", 'total_municipios': 0}
+
+
+@st.cache_data(ttl=300)
+def obtener_ranking_departamento_especifico(departamento: str,
+                                             umbral_similitud: float,
+                                             solo_politica_publica: bool = True) -> Dict[str, Any]:
+    """
+    Computes the rank for a specific department without loading all rankings.
+
+    Returns:
+        Dict with 'ranking_position' and 'total_departamentos'
+    """
+    try:
+        where_conditions = [
+            f"sentence_similarity >= {umbral_similitud}",
+            "tipo_territorio = 'Departamento'"
+        ]
+
+        if solo_politica_publica:
+            where_conditions.append(
+                "(predicted_class = 'Incluida' OR "
+                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
+            )
+
+        where_clause = " AND ".join(where_conditions)
+        departamento_escaped = departamento.replace("'", "''")
+
+        query = f"""
+            WITH ranking AS (
+                SELECT
+                    dpto,
+                    COUNT(DISTINCT recommendation_code) as num_recs,
+                    ROW_NUMBER() OVER (ORDER BY COUNT(DISTINCT recommendation_code) DESC) as rank_pos
+                FROM {DATA_TABLE}
+                WHERE {where_clause}
+                GROUP BY dpto
+            )
+            SELECT
+                (SELECT rank_pos FROM ranking WHERE dpto = '{departamento_escaped}') as ranking_position,
+                COUNT(*) as total_departamentos
+            FROM ranking
+        """
+
+        resultado = _execute_query(query)
+        if resultado:
+            row = resultado[0]
+            return {
+                'ranking_position': row[0] if row[0] is not None else "N/A",
+                'total_departamentos': row[1]
+            }
+        return {'ranking_position': "N/A", 'total_departamentos': 0}
+
+    except Exception as e:
+        st.error(f"Error obteniendo ranking departamental: {str(e)}")
+        return {'ranking_position': "N/A", 'total_departamentos': 0}
+
+
+@st.cache_data(ttl=300)
 def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
                                 departamento: str = None,
                                 municipio: str = None,
                                 limite: int = 10,
                                 filtro_pdet: str = "Todos",
-                                filtro_iica: list = None,
+                                filtro_iica: tuple = (),
                                 filtro_ipm: tuple = (0.0, 100.0),
-                                filtro_mdm: list = None) -> pd.DataFrame:
+                                filtro_mdm: tuple = ()) -> pd.DataFrame:
     """
     Obtiene las recomendaciones más frecuentemente mencionadas.
 
@@ -384,10 +588,6 @@ def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
         DataFrame con top recomendaciones
     """
     try:
-        conn = _get_connection()
-        if not conn:
-            return pd.DataFrame()
-
         where_conditions = [
             f"sentence_similarity >= {umbral_similitud}",
             "tipo_territorio = 'Municipio'"
@@ -401,7 +601,13 @@ def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
             municipio_escaped = municipio.replace("'", "''")
             where_conditions.append(f"mpio = '{municipio_escaped}'")
 
-        filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
+        filtro_iica_list = list(filtro_iica) if filtro_iica else None
+        filtro_ipm_tuple = tuple(filtro_ipm) if filtro_ipm else (0.0, 100.0)
+        filtro_mdm_list = list(filtro_mdm) if filtro_mdm else None
+
+        filtros_adicionales = construir_filtros_where(
+            filtro_pdet, filtro_iica_list, filtro_ipm_tuple, filtro_mdm_list
+        )
         where_clause = " AND ".join(where_conditions) + filtros_adicionales
 
         query = f"""
@@ -412,27 +618,28 @@ def obtener_top_recomendaciones(umbral_similitud: float = 0.6,
                 COUNT(*) as Frecuencia_Oraciones,
                 COUNT(DISTINCT mpio_cdpmp) as Municipios_Implementan,
                 AVG(sentence_similarity) as Similitud_Promedio
-            FROM {_parquet_source()}
+            FROM {DATA_TABLE}
             WHERE {where_clause}
             GROUP BY recommendation_code, recommendation_text, recommendation_priority
             ORDER BY Frecuencia_Oraciones DESC
             LIMIT {limite}
         """
 
-        return conn.execute(query).df()
+        return _execute_query_df(query)
 
     except Exception as e:
         st.error(f"Error obteniendo top recomendaciones: {str(e)}")
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300)
 def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
                                          umbral_similitud: float = 0.6,
                                          limite: int = 100,
                                          filtro_pdet: str = "Todos",
-                                         filtro_iica: list = None,
+                                         filtro_iica: tuple = (),
                                          filtro_ipm: tuple = (0.0, 100.0),
-                                         filtro_mdm: list = None) -> pd.DataFrame:
+                                         filtro_mdm: tuple = ()) -> pd.DataFrame:
     """
     Obtiene municipios que mencionan una recomendación específica.
 
@@ -440,12 +647,14 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
         DataFrame con municipios ordenados por frecuencia
     """
     try:
-        conn = _get_connection()
-        if not conn:
-            return pd.DataFrame()
-
         codigo_escaped = codigo_recomendacion.replace("'", "''")
-        filtros_adicionales = construir_filtros_where(filtro_pdet, filtro_iica, filtro_ipm, filtro_mdm)
+        filtro_iica_list = list(filtro_iica) if filtro_iica else None
+        filtro_ipm_tuple = tuple(filtro_ipm) if filtro_ipm else (0.0, 100.0)
+        filtro_mdm_list = list(filtro_mdm) if filtro_mdm else None
+
+        filtros_adicionales = construir_filtros_where(
+            filtro_pdet, filtro_iica_list, filtro_ipm_tuple, filtro_mdm_list
+        )
 
         query = f"""
             SELECT
@@ -454,7 +663,7 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
                 COUNT(*) as Frecuencia_Oraciones,
                 AVG(sentence_similarity) as Similitud_Promedio,
                 MAX(sentence_similarity) as Similitud_Maxima
-            FROM {_parquet_source()}
+            FROM {DATA_TABLE}
             WHERE recommendation_code = '{codigo_escaped}'
             AND sentence_similarity >= {umbral_similitud}
             AND tipo_territorio = 'Municipio'
@@ -464,107 +673,173 @@ def obtener_municipios_por_recomendacion(codigo_recomendacion: str,
             LIMIT {limite}
         """
 
-        return conn.execute(query).df()
+        return _execute_query_df(query)
 
     except Exception as e:
         st.error(f"Error obteniendo municipios por recomendación: {str(e)}")
         return pd.DataFrame()
 
 
+@st.cache_data
 def obtener_todos_los_municipios() -> pd.DataFrame:
     """
     Obtiene lista completa de municipios únicos disponibles.
+    Cached permanently: underlying data does not change.
 
     Returns:
         DataFrame con código, nombre de municipio y departamento
     """
     try:
-        conn = _get_connection()
-        if not conn:
-            return pd.DataFrame()
-
         query = f"""
             SELECT DISTINCT
                 mpio_cdpmp,
                 mpio as Municipio,
                 dpto_cdpmp,
                 dpto as Departamento
-            FROM {_parquet_source()}
+            FROM {DATA_TABLE}
             WHERE tipo_territorio = 'Municipio'
             ORDER BY dpto, mpio
         """
 
-        return conn.execute(query).df()
+        return _execute_query_df(query)
 
     except Exception as e:
         st.error(f"Error obteniendo lista de municipios: {str(e)}")
         return pd.DataFrame()
 
 
+@st.cache_data
 def obtener_todos_los_departamentos() -> pd.DataFrame:
     """
     Obtiene lista completa de departamentos únicos disponibles.
+    Cached permanently: underlying data does not change.
 
     Returns:
         DataFrame con código y nombre de departamento
     """
     try:
-        conn = _get_connection()
-        if not conn:
-            return pd.DataFrame()
-
         query = f"""
             SELECT DISTINCT
                 dpto_cdpmp,
                 dpto as Departamento
-            FROM {_parquet_source()}
+            FROM {DATA_TABLE}
             WHERE tipo_territorio = 'Municipio'
             ORDER BY dpto
         """
 
-        return conn.execute(query).df()
+        return _execute_query_df(query)
 
     except Exception as e:
         st.error(f"Error obteniendo lista de departamentos: {str(e)}")
         return pd.DataFrame()
 
 
-# Alias for backward compatibility with app.py
-def conectar_duckdb_parquet() -> Optional[duckdb.DuckDBPyConnection]:
-    """Alias for get_duckdb_connection for backward compatibility."""
-    return get_duckdb_connection()
-
-
-def ejecutar_query(query: str) -> pd.DataFrame:
+@st.cache_data
+def obtener_todos_los_departamentos_territorio() -> pd.DataFrame:
     """
-    Executes a raw SQL query against the parquet file.
-
-    The query should use 'datos' as the table name, which will be
-    replaced with the actual parquet read expression.
-
-    Example:
-        ejecutar_query("SELECT * FROM datos WHERE dpto = 'Antioquia'")
-
-    Args:
-        query: SQL query with 'datos' as table placeholder
+    Obtiene lista de departamentos únicos con datos tipo_territorio = 'Departamento'
+    Cached permanently: underlying data does not change.
 
     Returns:
-        DataFrame with query results
+        DataFrame con departamentos disponibles
     """
     try:
-        conn = _get_connection()
-        if not conn:
-            return pd.DataFrame()
+        query = f"""
+            SELECT DISTINCT
+                dpto_cdpmp,
+                dpto as Departamento
+            FROM {DATA_TABLE}
+            WHERE tipo_territorio = 'Departamento'
+            ORDER BY dpto
+        """
 
-        # Replace 'datos' placeholder with parquet source
-        actual_query = query.replace('datos', _parquet_source())
-        return conn.execute(actual_query).df()
+        return _execute_query_df(query)
 
     except Exception as e:
-        st.error(f"Error ejecutando query: {str(e)}")
+        st.error(f"Error obteniendo departamentos: {str(e)}")
         return pd.DataFrame()
 
 
-def get_parquet_source() -> str:
-    """Returns the parquet read expression for use in custom queries."""
-    return _parquet_source()
+@st.cache_data(ttl=300)
+def obtener_ranking_departamentos(umbral_similitud: float,
+                                  solo_politica_publica: bool = True,
+                                  top_n: int = None) -> pd.DataFrame:
+    """
+    Genera ranking de departamentos por número de recomendaciones implementadas.
+
+    Returns:
+        DataFrame ordenado por ranking
+    """
+    try:
+        where_conditions = [
+            f"sentence_similarity >= {umbral_similitud}",
+            "tipo_territorio = 'Departamento'"
+        ]
+
+        if solo_politica_publica:
+            where_conditions.append(
+                "(predicted_class = 'Incluida' OR "
+                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
+            )
+
+        where_clause = " AND ".join(where_conditions)
+        limit_clause = f"LIMIT {top_n}" if top_n else ""
+
+        query = f"""
+            SELECT
+                dpto_cdpmp,
+                dpto as Departamento,
+                COUNT(DISTINCT recommendation_code) as Recomendaciones_Implementadas,
+                COUNT(*) as Total_Oraciones,
+                AVG(sentence_similarity) as Similitud_Promedio,
+                COUNT(CASE WHEN recommendation_priority = 1 THEN 1 END) as Prioritarias_Implementadas,
+                ROW_NUMBER() OVER (ORDER BY COUNT(DISTINCT recommendation_code) DESC) as Ranking
+            FROM {DATA_TABLE}
+            WHERE {where_clause}
+            GROUP BY dpto_cdpmp, dpto
+            ORDER BY Recomendaciones_Implementadas DESC
+            {limit_clause}
+        """
+
+        return _execute_query_df(query)
+
+    except Exception as e:
+        st.error(f"Error generando ranking departamental: {str(e)}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def obtener_datos_mapa_municipal(dpto_code: str, min_similarity: float) -> pd.DataFrame:
+    """
+    Obtiene datos agregados de municipios de un departamento para el mapa.
+
+    Args:
+        dpto_code: Código del departamento (se normaliza a 2 dígitos)
+        min_similarity: Umbral de similitud mínima
+
+    Returns:
+        DataFrame con datos municipales agregados
+    """
+    try:
+        dpto_code_normalized = str(dpto_code).zfill(2)
+
+        query = f"""
+            SELECT
+                mpio_cdpmp,
+                mpio as Municipio,
+                dpto as Departamento,
+                COUNT(DISTINCT recommendation_code) as Num_Recomendaciones,
+                AVG(sentence_similarity) as Similitud_Promedio
+            FROM {DATA_TABLE}
+            WHERE dpto_cdpmp = '{dpto_code_normalized}'
+            AND sentence_similarity >= {min_similarity}
+            AND tipo_territorio = 'Municipio'
+            GROUP BY mpio_cdpmp, mpio, dpto
+            ORDER BY Num_Recomendaciones DESC
+        """
+
+        return _execute_query_df(query)
+
+    except Exception as e:
+        st.error(f"Error obteniendo datos de mapa municipal: {str(e)}")
+        return pd.DataFrame()

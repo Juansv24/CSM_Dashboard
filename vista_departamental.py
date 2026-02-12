@@ -1,91 +1,12 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from data_client import consultar_datos_filtrados, get_parquet_source
-
-
-def obtener_todos_los_departamentos_territorio() -> pd.DataFrame:
-    """
-    Obtiene lista de departamentos únicos con datos tipo_territorio = 'Departamento'
-
-    Returns:
-        DataFrame con departamentos disponibles
-    """
-    try:
-        conn = st.session_state.get('duckdb_conn')
-        if not conn:
-            return pd.DataFrame()
-
-        query = f"""
-            SELECT DISTINCT
-                dpto_cdpmp,
-                dpto as Departamento
-            FROM {get_parquet_source()}
-            WHERE tipo_territorio = 'Departamento'
-            ORDER BY dpto
-        """
-
-        return conn.execute(query).df()
-
-    except Exception as e:
-        st.error(f"Error obteniendo departamentos: {str(e)}")
-        return pd.DataFrame()
-
-
-def obtener_ranking_departamentos(umbral_similitud: float,
-                                  solo_politica_publica: bool = True,
-                                  top_n: int = None) -> pd.DataFrame:
-    """
-    Genera ranking de departamentos por número de recomendaciones implementadas
-
-    Args:
-        umbral_similitud: Similitud mínima
-        solo_politica_publica: Si filtrar solo política pública
-        top_n: Número máximo de resultados
-
-    Returns:
-        DataFrame ordenado por ranking
-    """
-    try:
-        conn = st.session_state.get('duckdb_conn')
-        if not conn:
-            return pd.DataFrame()
-
-        where_conditions = [
-            f"sentence_similarity >= {umbral_similitud}",
-            "tipo_territorio = 'Departamento'"
-        ]
-
-        if solo_politica_publica:
-            where_conditions.append(
-                "(predicted_class = 'Incluida' OR "
-                "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
-            )
-
-        where_clause = " AND ".join(where_conditions)
-        limit_clause = f"LIMIT {top_n}" if top_n else ""
-
-        query = f"""
-            SELECT
-                dpto_cdpmp,
-                dpto as Departamento,
-                COUNT(DISTINCT recommendation_code) as Recomendaciones_Implementadas,
-                COUNT(*) as Total_Oraciones,
-                AVG(sentence_similarity) as Similitud_Promedio,
-                COUNT(CASE WHEN recommendation_priority = 1 THEN 1 END) as Prioritarias_Implementadas,
-                ROW_NUMBER() OVER (ORDER BY COUNT(DISTINCT recommendation_code) DESC) as Ranking
-            FROM {get_parquet_source()}
-            WHERE {where_clause}
-            GROUP BY dpto_cdpmp, dpto
-            ORDER BY Recomendaciones_Implementadas DESC
-            {limit_clause}
-        """
-
-        return conn.execute(query).df()
-
-    except Exception as e:
-        st.error(f"Error generando ranking departamental: {str(e)}")
-        return pd.DataFrame()
+from data_client import (
+    consultar_datos_filtrados,
+    obtener_todos_los_departamentos_territorio,
+    obtener_ranking_departamentos,
+    obtener_ranking_departamento_especifico
+)
 
 
 def to_csv_utf8_bom(df):
@@ -142,50 +63,28 @@ def render_ficha_departamental():
         help="Filtrar para incluir solo contenido clasificado como política pública"
     )
 
-    # Obtener datos filtrados con tipo_territorio = 'Departamento'
-    conn = st.session_state.get('duckdb_conn')
-    if not conn:
-        st.error("No hay conexión a la base de datos")
-        return
+    # Obtener datos filtrados using data_client (thread-safe + cached)
+    datos_filtrados = consultar_datos_filtrados(
+        umbral_similitud=sentence_threshold,
+        departamento=selected_department if selected_department != 'Todos' else None,
+        solo_politica_publica=include_policy_only,
+        tipo_territorio='Departamento'
+    )
 
-    # Construir query con filtro de tipo_territorio
-    where_conditions = [
-        f"sentence_similarity >= {sentence_threshold}",
-        "tipo_territorio = 'Departamento'"
-    ]
-
-    if include_policy_only:
-        where_conditions.append(
-            "(predicted_class = 'Incluida' OR "
-            "(predicted_class = 'Excluida' AND prediction_confidence < 0.8))"
-        )
-
-    if selected_department != 'Todos':
-        departamento_escaped = selected_department.replace("'", "''")
-        where_conditions.append(f"dpto = '{departamento_escaped}'")
-
-    where_clause = " AND ".join(where_conditions)
-
-    query = f"""
-        SELECT * FROM {get_parquet_source()}
-        WHERE {where_clause}
-        ORDER BY sentence_similarity DESC
-    """
-
-    datos_filtrados = conn.execute(query).df()
-    high_quality_sentences = datos_filtrados[datos_filtrados['sentence_similarity'] >= sentence_threshold]
+    # SQL already filters by sentence_similarity >= threshold
+    high_quality_sentences = datos_filtrados
 
     # Validación para departamento sin datos
     if selected_department != 'Todos' and high_quality_sentences.empty:
         st.warning(f"""
         ⚠️ **Sin datos para mostrar**
 
-        El departamento **{selected_department}** no tiene información disponible 
+        El departamento **{selected_department}** no tiene información disponible
         con el umbral de similitud actual ({sentence_threshold:.2f}).
 
         **Opciones:**
         - Reduzca el umbral de similitud en el panel izquierdo
-        - Desactive el filtro "Solo secciones de política pública" 
+        - Desactive el filtro "Solo secciones de política pública"
         - Seleccione un departamento diferente
         """)
         return
@@ -222,10 +121,10 @@ def _render_vista_departamento_especifico(departamento, sentence_threshold,
 
     # Encabezado
     st.markdown(f"""
-    <div style="background: linear-gradient(90deg, #1f77b4 0%, #17a2b8 100%); 
-                color: white; 
-                padding: 2rem; 
-                border-radius: 15px; 
+    <div style="background: linear-gradient(90deg, #1f77b4 0%, #17a2b8 100%);
+                color: white;
+                padding: 2rem;
+                border-radius: 15px;
                 margin-bottom: 2rem;
                 box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
         <h1 style="margin: 0.5rem 0 0 0; font-size: 3rem; font-weight: 700;">{departamento}</h1>
@@ -263,11 +162,11 @@ def _render_vista_comparativa_departamental(sentence_threshold, datos_comparativ
     """
 
     st.markdown(f"""
-    <div style="background: linear-gradient(90deg, #6c757d 0%, #495057 100%); 
-                color: white; 
-                padding: 2rem; 
-                border-radius: 15px; 
-                margin-bottom: 2rem; 
+    <div style="background: linear-gradient(90deg, #6c757d 0%, #495057 100%);
+                color: white;
+                padding: 2rem;
+                border-radius: 15px;
+                margin-bottom: 2rem;
                 text-align: center;">
         <h1>📊 Vista Comparativa Departamental</h1>
         <p>Todos los departamentos</p>
@@ -313,20 +212,15 @@ def _render_analisis_implementacion_departamento(datos_departamento, high_qualit
         high_quality_sentences['recommendation_priority'] == 1
         ]['recommendation_code'].nunique()
 
-    # Obtener ranking general
-    ranking_data = obtener_ranking_departamentos(
+    # Obtener targeted ranking (no loading all departments)
+    ranking_info = obtener_ranking_departamento_especifico(
+        departamento=departamento,
         umbral_similitud=sentence_threshold,
-        solo_politica_publica=include_policy_only,
-        top_n=None
+        solo_politica_publica=include_policy_only
     )
 
-    ranking_position = "N/A"
-    total_departamentos = len(ranking_data)
-
-    if not ranking_data.empty:
-        depto_rank = ranking_data[ranking_data['Departamento'] == departamento]
-        if not depto_rank.empty:
-            ranking_position = depto_rank['Ranking'].iloc[0]
+    ranking_position = ranking_info['ranking_position']
+    total_departamentos = ranking_info['total_departamentos']
 
     # Mostrar métricas
     col1, col2, col3 = st.columns(3)

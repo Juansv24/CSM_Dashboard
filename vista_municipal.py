@@ -6,7 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from data_client import (
     consultar_datos_filtrados,
-    obtener_ranking_municipios,
+    obtener_ranking_municipio_especifico,
     obtener_todos_los_municipios,
     obtener_todos_los_departamentos
 )
@@ -133,7 +133,8 @@ def render_ficha_municipal():
         solo_politica_publica=include_policy_only
     )
 
-    high_quality_sentences = datos_filtrados[datos_filtrados['sentence_similarity'] >= sentence_threshold]
+    # SQL already filters by sentence_similarity >= threshold
+    high_quality_sentences = datos_filtrados
 
     # Validación para municipio sin datos
     if selected_municipality != 'Todos' and high_quality_sentences.empty:
@@ -342,20 +343,15 @@ def _render_analisis_implementacion_municipio(datos_municipio, high_quality_sent
         high_quality_sentences['recommendation_priority'] == 1
         ]['recommendation_code'].nunique()
 
-    # Obtener ranking general
-    ranking_data = obtener_ranking_municipios(
+    # Obtener targeted ranking (no loading all municipalities)
+    ranking_info = obtener_ranking_municipio_especifico(
+        municipio=municipio,
         umbral_similitud=sentence_threshold,
-        solo_politica_publica=include_policy_only,
-        top_n=None
+        solo_politica_publica=include_policy_only
     )
 
-    ranking_position = "N/A"
-    total_municipios = len(ranking_data)
-
-    if not ranking_data.empty:
-        municipio_rank = ranking_data[ranking_data['Municipio'] == municipio]
-        if not municipio_rank.empty:
-            ranking_position = municipio_rank['Ranking'].iloc[0]
+    ranking_position = ranking_info['ranking_position']
+    total_municipios = ranking_info['total_municipios']
 
     # Mostrar métricas
     col1, col2, col3 = st.columns(3)

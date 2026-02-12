@@ -5,10 +5,7 @@ from datetime import datetime, timedelta
 from vista_general import render_vista_general
 from vista_departamental import render_ficha_departamental
 from vista_municipal import render_ficha_municipal
-from data_client import (
-    conectar_duckdb_parquet,
-    obtener_metadatos_basicos
-)
+from data_client import obtener_metadatos_basicos
 
 st.set_page_config(
     page_title="Dashboard de Similitudes Jerárquicas",
@@ -36,13 +33,6 @@ def _validar_sesion_activa(timeout_minutos: int = 30) -> bool:
     tiempo_inactivo = ahora - st.session_state.ultima_actividad
 
     if tiempo_inactivo > timedelta(minutes=timeout_minutos):
-        if 'duckdb_conn' in st.session_state and st.session_state.duckdb_conn:
-            try:
-                st.session_state.duckdb_conn.close()
-            except:
-                pass
-            st.session_state.duckdb_conn = None
-
         del st.session_state.ultima_actividad
         return False
 
@@ -74,16 +64,7 @@ def main():
 
     _inicializar_sesion_usuario()
 
-    # Initialize DuckDB connection
-    if 'duckdb_conn' not in st.session_state:
-        conn = conectar_duckdb_parquet()
-        st.session_state.duckdb_conn = conn
-
-        if conn is None:
-            st.error("No se pudo conectar a la base de datos")
-            st.stop()
-
-    # Load basic metadata
+    # Load basic metadata (cached, thread-safe)
     metadatos = obtener_metadatos_basicos()
     if not metadatos:
         st.error("No se pudieron obtener los metadatos")
