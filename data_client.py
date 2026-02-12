@@ -1,17 +1,17 @@
 """
-Data client for DuckDB with persistent database.
+Data client for DuckDB with persistent in-memory database.
 Optimized for Hugging Face Spaces deployment.
-Thread-safe: one-time parquet-to-duckdb conversion, read-only connections per query.
+Thread-safe: parquet loaded once into memory, shared connection with lock.
 """
 import streamlit as st
 import pandas as pd
 import duckdb
 import os
+import threading
 from typing import Optional, Dict, Any, List
 
-# Path to local parquet file and persistent database
+# Path to local parquet file
 PARQUET_PATH = "Data/Data Final Dashboard.parquet"
-DB_PATH = "Data/dashboard.duckdb"
 DATA_TABLE = "data"
 
 # Default columns used by most views (excludes heavy text fields)
@@ -30,64 +30,42 @@ DEFAULT_COLUMNS = [
 
 
 @st.cache_resource
-def _init_db() -> str:
+def _init_db():
     """
-    One-time conversion of parquet to DuckDB native format.
-    Persists across all sessions. Returns the database path.
+    One-time load of parquet into an in-memory DuckDB table.
+    Cached for the lifetime of the app process. No extra files on disk.
+    Returns (connection, lock) for thread-safe access.
     """
     if not os.path.exists(PARQUET_PATH):
-        st.error(f"Archivo de datos no encontrado: {PARQUET_PATH}")
-        return ""
+        raise FileNotFoundError(f"Archivo de datos no encontrado: {PARQUET_PATH}")
 
-    if not os.path.exists(DB_PATH):
-        conn = duckdb.connect(DB_PATH)
-        try:
-            conn.execute(f"""
-                CREATE TABLE {DATA_TABLE} AS
-                SELECT * FROM read_parquet('{PARQUET_PATH}')
-            """)
-        finally:
-            conn.close()
-
-    return DB_PATH
-
-
-def _get_connection() -> duckdb.DuckDBPyConnection:
-    """
-    Returns a read-only connection to the persistent database.
-    Lightweight: no data loading, just opens the existing file.
-    """
-    db_path = _init_db()
-    return duckdb.connect(db_path, read_only=True)
-
-
-def get_table_name() -> str:
-    """Returns the table name for use in custom queries."""
-    return DATA_TABLE
+    conn = duckdb.connect(':memory:')
+    conn.execute(f"""
+        CREATE TABLE {DATA_TABLE} AS
+        SELECT * FROM read_parquet('{PARQUET_PATH}')
+    """)
+    lock = threading.Lock()
+    return conn, lock
 
 
 def _execute_query(query: str) -> list:
     """
-    Execute a query with a read-only connection to the persistent database.
-    Returns raw results as a list of tuples.
+    Execute a query on the shared in-memory database.
+    Thread-safe via lock. Returns raw results as a list of tuples.
     """
-    conn = _get_connection()
-    try:
+    conn, lock = _init_db()
+    with lock:
         return conn.execute(query).fetchall()
-    finally:
-        conn.close()
 
 
 def _execute_query_df(query: str) -> pd.DataFrame:
     """
-    Execute a query with a read-only connection to the persistent database.
-    Returns results as a DataFrame.
+    Execute a query on the shared in-memory database.
+    Thread-safe via lock. Returns results as a DataFrame.
     """
-    conn = _get_connection()
-    try:
+    conn, lock = _init_db()
+    with lock:
         return conn.execute(query).df()
-    finally:
-        conn.close()
 
 
 def construir_filtros_where(filtro_pdet: str = "Todos",
